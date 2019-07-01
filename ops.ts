@@ -23,3 +23,4 @@ export const standardDispatcherRespond = plugin.loadOp("standard_dispatcher_resp
 // Isolate ops
 export const newStartupData = plugin.loadOp("new_startup_data");
 export const newIsolate = plugin.loadOp("new_isolate");
+export const isolateSetDispatcher = plugin.loadOp("isolate_set_dispatcher");

@@ -1,5 +1,4 @@
 use crate::errors::new_error;
-use crate::msg::ResourceIdResponse;
 use crate::msg::EmptyResponse;
 use crate::msg::ResourceId;
 use crate::util::wrap_op;
@@ -8,8 +7,6 @@ use crate::util::serialize_and_wrap;
 use deno::PinnedBuf;
 use deno::CoreOp;
 use deno::Op;
-use deno::Buf;
-use futures::Async;
 use futures::sink::Sink;
 use futures::sync::oneshot;
 use futures::sync::mpsc::channel;

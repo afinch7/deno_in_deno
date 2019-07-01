@@ -1,7 +1,9 @@
+use crate::dispatch::get_dispatcher;
 use crate::util::wrap_op;
 use crate::util::serialize_and_wrap;
 use crate::msg::ResourceId;
 use crate::msg::ResourceIdResponse;
+use crate::msg::EmptyResponse;
 use deno::CoreOp;
 use deno::PinnedBuf;
 use deno::Isolate;
@@ -82,4 +84,29 @@ fn op_new_isolate_inner(
     let mut lock = ISOLATE_MAP.lock().unwrap();
     lock.insert(isolate_rid, Arc::new(Mutex::new(isolate)));
     isolate_rid
+}
+
+#[derive(Deserialize)]
+struct IsolateSetDispatcherOptions {
+    pub rid: u32,
+    pub dispatcher_rid: u32,
+}
+
+pub fn op_isolate_set_dispatcher(
+    data: &[u8],
+    zero_copy: Option<PinnedBuf>,
+) -> CoreOp {
+    wrap_op(|data, _zero_copy| {
+        let data_str = std::str::from_utf8(&data[..]).unwrap();
+        let options: IsolateSetDispatcherOptions = serde_json::from_str(data_str).unwrap();
+
+        let lock = ISOLATE_MAP.lock().unwrap();
+        let isolate = lock.get(&options.rid).unwrap();
+        let dispatcher = get_dispatcher(options.dispatcher_rid);
+        let mut isolate_lock = isolate.lock().unwrap();
+        isolate_lock.set_dispatch(move |data, zero_copy| {
+            dispatcher.dispatch(data, zero_copy)
+        });
+        serialize_and_wrap(EmptyResponse)
+    }, data, zero_copy)
 }

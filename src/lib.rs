@@ -24,3 +24,4 @@ declare_plugin_op!(standard_dispatcher_respond, dispatch::op_standard_dispatcher
 // Isolate ops
 declare_plugin_op!(new_startup_data, isolate::op_new_startup_data);
 declare_plugin_op!(new_isolate, isolate::op_new_isolate);
+declare_plugin_op!(isolate_set_dispatcher, isolate::op_isolate_set_dispatcher);

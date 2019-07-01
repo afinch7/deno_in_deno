@@ -1,5 +1,5 @@
 [package]
-name = "ts_deno"
+name = "deno_in_deno"
 version = "0.1.0"
 authors = ["andy <andyfinch7@gmail.com>"]
 edition = "2018"

@@ -1,14 +1,14 @@
 use serde::{Serialize};
 
-pub type TsDenoResult<T> = std::result::Result<T, TsDenoError>;
+pub type DIDResult<T> = std::result::Result<T, DIDError>;
 
 #[derive(Serialize)]
-pub struct TsDenoError {
+pub struct DIDError {
   message: String,
 }
 
-pub fn new_error(message: &str) -> TsDenoError {
-  TsDenoError {
+pub fn new_error(message: &str) -> DIDError {
+  DIDError {
     message: message.to_string(),
   }
 }

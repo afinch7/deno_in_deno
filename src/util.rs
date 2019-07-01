@@ -1,5 +1,6 @@
-use crate::errors::TsDenoError;
-use crate::msg::TsDenoResponse;
+use crate::errors::DIDError;
+use crate::msg::DIDResponse;
+use crate::msg::EmptyResponse;
 use deno::Buf;
 use deno::CoreOp;
 use deno::Op;
@@ -8,20 +9,17 @@ use deno::PinnedBuf;
 use serde::Serialize;
 use futures::future::Future;
 
-pub type TsDenoOpResult = OpResult<TsDenoError>;
+pub type DIDOpResult = OpResult<DIDError>;
 
-pub type TsDenoOpFn = fn(&[u8], Option<PinnedBuf>) -> TsDenoOpResult;
+pub type DIDOpFn = fn(&[u8], Option<PinnedBuf>) -> DIDOpResult;
 
-#[derive(Serialize)]
-struct Empty;
-
-pub fn wrap_op(op: TsDenoOpFn, data: &[u8], zero_copy: Option<PinnedBuf>) -> CoreOp {
+pub fn wrap_op(op: DIDOpFn, data: &[u8], zero_copy: Option<PinnedBuf>) -> CoreOp {
     match op(data, zero_copy) {
         Ok(Op::Sync(buf)) => Op::Sync(buf),
         Ok(Op::Async(fut)) => {
             let result_fut = Box::new(
-                fut.or_else(move |err: TsDenoError| -> Result<Buf, ()> {
-                    let result = TsDenoResponse::<Empty> {
+                fut.or_else(move |err: DIDError| -> Result<Buf, ()> {
+                    let result = DIDResponse::<EmptyResponse> {
                         error: Some(err),
                         data: None,
                     };
@@ -32,7 +30,7 @@ pub fn wrap_op(op: TsDenoOpFn, data: &[u8], zero_copy: Option<PinnedBuf>) -> Cor
             Op::Async(result_fut)
         },
         Err(err) => {
-            let result = TsDenoResponse::<Empty> {
+            let result = DIDResponse::<EmptyResponse> {
                 error: Some(err),
                 data: None,
             };
@@ -43,7 +41,7 @@ pub fn wrap_op(op: TsDenoOpFn, data: &[u8], zero_copy: Option<PinnedBuf>) -> Cor
 }
 
 pub fn serialize_response<D: Serialize>(data: D) -> Buf {
-    let result = TsDenoResponse {
+    let result = DIDResponse {
         data: Some(data),
         error: None,
     };
@@ -51,6 +49,6 @@ pub fn serialize_response<D: Serialize>(data: D) -> Buf {
     result_json.as_bytes().into()
 }
 
-pub fn serialize_and_wrap<D: Serialize>(data: D) -> TsDenoOpResult {
+pub fn serialize_and_wrap<D: Serialize>(data: D) -> DIDOpResult {
     Ok(Op::Sync(serialize_response(data)))
 }

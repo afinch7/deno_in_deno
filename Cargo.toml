@@ -1,17 +1,5 @@
-[package]
-name = "deno_in_deno"
-version = "0.1.0"
-authors = ["andy <andyfinch7@gmail.com>"]
-edition = "2018"
-
-[lib]
-path = "src/lib.rs"
-crate-type = ["cdylib"]
-
-[dependencies]
-deno = { path = "../deno/core" }
-
-serde_json = "1.0.39"
-serde = { version = "1.0", features = ["derive"] }
-futures = "0.1.28"
-lazy_static = "1.3.0"
+[workspace]
+members = [
+  "plugin",
+  "test_dispatcher",
+]

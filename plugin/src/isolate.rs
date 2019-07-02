@@ -1,13 +1,19 @@
 use crate::dispatch::get_dispatcher;
+use crate::errors::new_error;
+use crate::errors::DIDError;
 use crate::util::wrap_op;
 use crate::util::serialize_and_wrap;
+use crate::util::serialize_response;
 use crate::msg::ResourceId;
 use crate::msg::ResourceIdResponse;
 use crate::msg::EmptyResponse;
+use deno::Op;
 use deno::CoreOp;
 use deno::PinnedBuf;
 use deno::Isolate;
 use deno::StartupData;
+use futures::Future;
+use futures::Async;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::cell::RefCell;
@@ -17,9 +23,9 @@ use std::sync::Mutex;
 use std::sync::Arc;
 
 lazy_static! {
-    static ref NEXT_STARTUP_DATA_ID: AtomicU32 = AtomicU32::new(0);
+    static ref NEXT_STARTUP_DATA_ID: AtomicU32 = AtomicU32::new(1);
     static ref STARTUP_DATA_MAP: Mutex<HashMap<u32, RefCell<Vec<u8>>>> = Mutex::new(HashMap::new());
-    static ref NEXT_ISOLATE_ID: AtomicU32 = AtomicU32::new(0);
+    static ref NEXT_ISOLATE_ID: AtomicU32 = AtomicU32::new(1);
     static ref ISOLATE_MAP: Mutex<HashMap<u32, Arc<Mutex<Isolate>>>> = Mutex::new(HashMap::new());
 }
 
@@ -86,6 +92,48 @@ fn op_new_isolate_inner(
     isolate_rid
 }
 
+struct IsolateWorker {
+    pub rid: u32,
+}
+
+impl Future for IsolateWorker {
+    type Item = ();
+    type Error = DIDError;
+
+    fn poll(&mut self) -> Result<Async<()>, Self::Error> {
+        let lock = ISOLATE_MAP.lock().unwrap();
+        let i = lock.get(&self.rid).unwrap();
+        let mut isolate = i.lock().unwrap();
+        isolate
+            .poll()
+            .map_err(|err| new_error(&format!("{:#?}", err)))
+    }
+}
+
+#[derive(Deserialize)]
+struct IsolateIsCompleteOptions {
+    pub rid: u32,
+}
+
+pub fn op_isolate_is_complete(
+    data: &[u8],
+    zero_copy: Option<PinnedBuf>,
+) -> CoreOp {
+    wrap_op(|data, _zero_copy| {
+        let data_str = std::str::from_utf8(&data[..]).unwrap();
+        let options: IsolateIsCompleteOptions = serde_json::from_str(data_str).unwrap();
+
+        let isolate_worker = IsolateWorker {
+            rid: options.rid,
+        };
+
+        let op = Box::new(isolate_worker.and_then(|_| {
+            Ok(serialize_response(EmptyResponse))
+        }));
+        Ok(Op::Async(op))
+    }, data, zero_copy)
+}
+
 #[derive(Deserialize)]
 struct IsolateSetDispatcherOptions {
     pub rid: u32,
@@ -108,5 +156,33 @@ pub fn op_isolate_set_dispatcher(
             dispatcher.dispatch(data, zero_copy)
         });
         serialize_and_wrap(EmptyResponse)
+    }, data, zero_copy)
+}
+
+#[derive(Deserialize)]
+struct IsolateExecuteOptions {
+    pub rid: u32,
+    pub filename: String,
+    pub source: String,
+}
+
+pub fn op_isolate_execute(
+    data: &[u8],
+    zero_copy: Option<PinnedBuf>,
+) -> CoreOp {
+    wrap_op(|data, _zero_copy| {
+        let data_str = std::str::from_utf8(&data[..]).unwrap();
+        let options: IsolateExecuteOptions = serde_json::from_str(data_str).unwrap();
+
+        let op = Box::new(futures::future::lazy(move || {
+            let lock = ISOLATE_MAP.lock().unwrap();
+            let isolate = lock.get(&options.rid).unwrap();
+            let mut isolate_lock = isolate.lock().unwrap();
+            match isolate_lock.execute(&options.filename, &options.source) {
+                Ok(_) => Ok(serialize_response(EmptyResponse)),
+                Err(err) => Err(new_error(&format!("{:#?}", err))),
+            }
+        }));
+        Ok(Op::Async(op))
     }, data, zero_copy)
 }

@@ -1,4 +1,5 @@
 use crate::errors::new_error;
+use crate::errors::DIDError;
 use crate::msg::EmptyResponse;
 use crate::msg::ResourceId;
 use crate::util::wrap_op;
@@ -7,15 +8,14 @@ use crate::util::serialize_and_wrap;
 use deno::PinnedBuf;
 use deno::CoreOp;
 use deno::Op;
-use futures::sink::Sink;
-use futures::sync::oneshot;
-use futures::sync::mpsc::channel;
-use futures::sync::mpsc::Sender;
-use futures::sync::mpsc::Receiver;
-use futures::stream::Stream;
-use futures::stream::StreamFuture;
-use futures::future::Future;
-use futures::future::Shared;
+use tokio::sync::oneshot;
+use tokio::sync::mpsc::channel;
+use tokio::sync::mpsc::Receiver;
+use tokio::sync::mpsc::Sender;
+use futures::executor::enter;
+use futures::Async;
+use futures::Future;
+use futures::Stream;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -26,9 +26,9 @@ use std::sync::Mutex;
 use std::sync::Arc;
 
 lazy_static! {
-    static ref NEXT_DISPATCHER_ID: AtomicU32 = AtomicU32::new(0);
+    static ref NEXT_DISPATCHER_ID: AtomicU32 = AtomicU32::new(1);
     static ref DISPATCHER_MAP: RwLock<HashMap<u32, Arc<Box<Dispatcher>>>> = RwLock::new(HashMap::new());
-    static ref NEXT_STANDARD_DISPATCHER_ID: AtomicU32 = AtomicU32::new(0);
+    static ref NEXT_STANDARD_DISPATCHER_ID: AtomicU32 = AtomicU32::new(1);
     static ref STANDARD_DISPATCHER_MAP: RwLock<HashMap<u32, Arc<StandardDispatcher>>> = RwLock::new(HashMap::new());
 }
 
@@ -51,13 +51,14 @@ pub fn get_dispatcher(dispatcher_rid: ResourceId) -> Arc<Box<Dispatcher>> {
 }
 
 type StandardDispatchReq = (u32, Vec<u8>, Option<Vec<u8>>);
-type StandardDispatchReqReceiver = Shared<StreamFuture<Receiver<StandardDispatchReq>>>;
+type StandardDispatchReqReceiver = Receiver<StandardDispatchReq>;
+type StandardDispatchReqSender = Sender<StandardDispatchReq>;
+type StandardDispatchReqChannels = (StandardDispatchReqReceiver, StandardDispatchReqSender);
 
 struct StandardDispatcher {
     pub next_cmd_id: AtomicU32,
     pub res_senders: Arc<RwLock<HashMap<u32, oneshot::Sender<CoreOp>>>>,
-    pub req_receiver: Arc<Mutex<StandardDispatchReqReceiver>>,
-    pub req_sender: Sender<StandardDispatchReq>,
+    pub req_channels: Arc<Mutex<StandardDispatchReqChannels>>,
 }
 
 impl StandardDispatcher {
@@ -66,8 +67,7 @@ impl StandardDispatcher {
         Self {
             next_cmd_id: AtomicU32::new(0),
             res_senders: Arc::new(RwLock::new(HashMap::new())),
-            req_receiver: Arc::new(Mutex::new(req_reciever.into_future().shared())),
-            req_sender:req_sender,
+            req_channels: Arc::new(Mutex::new((req_reciever, req_sender))),
         }
     }
 }
@@ -78,8 +78,8 @@ impl Dispatcher for StandardDispatcher {
         let (res_sender, res_reciever) = oneshot::channel::<CoreOp>();
         let mut lock = self.res_senders.write().unwrap();
         lock.insert(cmd_id, res_sender);
-        let sender_clone = self.req_sender.clone();
-        sender_clone.send((cmd_id, data.to_vec(), zero_copy.map(|v| v.to_vec())));
+        let mut channels = self.req_channels.lock().unwrap();
+        channels.1.try_send((cmd_id, data.to_vec(), zero_copy.map(|v| v.to_vec()))).unwrap();
         res_reciever.wait().unwrap()
     }
 }
@@ -122,14 +122,34 @@ lazy_static! {
 #[derive(Deserialize)]
 struct StandardDispatcherWaitForDispatchOptions {
     pub rid: u32,
-    pub op_id: u32,
 }
 
 #[derive(Serialize)]
 struct StandardDispatcherWaitForDispatchResponse {
     pub cmd_id: u32,
+    // TODO(afinch7) encode these outside of json.
+    // Currently we encode data and zero_copy into json.
+    // This will be very slow, but it works for testing.
     pub data: Vec<u8>,
     pub zero_copy: Option<Vec<u8>>,
+}
+
+struct RecvWorker {
+    rid: u32,
+}
+
+impl Future for RecvWorker {
+    type Item = StandardDispatchReq;
+    type Error = DIDError;
+
+    fn poll(&mut self) -> Result<Async<Self::Item>, Self::Error> {
+        let lock = STANDARD_DISPATCHER_MAP.read().unwrap();
+        let dispatcher = lock.get(&self.rid).unwrap();
+        let mut channels = dispatcher.req_channels.lock().unwrap();
+        channels.0.poll()
+            .map_err(|err| new_error(&format!("{:#?}", err)))
+            .and_then(|result| Ok(result.map(|result| result.unwrap())))
+    }
 }
 
 pub fn op_standard_dispatcher_wait_for_dispatch(
@@ -139,23 +159,18 @@ pub fn op_standard_dispatcher_wait_for_dispatch(
     wrap_op(|data, _zero_copy| {
         let data_str = std::str::from_utf8(&data[..]).unwrap();
         let options: StandardDispatcherWaitForDispatchOptions = serde_json::from_str(data_str).unwrap();
-        let lock = STANDARD_DISPATCHER_MAP.read().unwrap();
-        let dispatcher = lock.get(&options.rid).unwrap();
-        let recv_lock = dispatcher.req_receiver.lock().unwrap().clone();
-        let op = Box::new(recv_lock
-            .map_err(|err| new_error(&format!("{:#?}", err)))
-            .and_then(|maybe_req| {
-                match &maybe_req.0 {
-                    // TODO(afinch7) the clones here are going to slow things down a lot.
-                    Some(req) => Ok(serialize_response(StandardDispatcherWaitForDispatchResponse {
-                        cmd_id: req.0,
-                        data: req.1.clone(),
-                        zero_copy: req.2.clone(),
-                    })),
-                    None => panic!("Recv stream ended!"),
-                }
-            })
-        );
+
+        let worker = RecvWorker {
+            rid: options.rid,
+        };
+        let op = Box::new(worker
+            .and_then(|req| {
+                Ok(serialize_response(StandardDispatcherWaitForDispatchResponse {
+                    cmd_id: req.0,
+                    data: req.1.clone(),
+                    zero_copy: req.2.clone(),
+                }))
+            }));
         Ok(Op::Async(op))
     }, data, zero_copy)
 }

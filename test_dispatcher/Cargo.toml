@@ -1,0 +1,16 @@
+[package]
+name = "test_dispatcher"
+version = "0.1.0"
+authors = ["afinch7 <andyfinch7@gmail.com>"]
+edition = "2018"
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+deno_in_deno = { path = "../plugin" }
+deno = { path = "../../deno/core" }
+
+serde_json = "1.0.39"
+serde = { version = "1.0", features = ["derive"] }

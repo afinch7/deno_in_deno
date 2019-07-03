@@ -1,3 +1,4 @@
+#![feature(async_await)]
 use deno::CoreOp;
 use deno::PinnedBuf;
 

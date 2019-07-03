@@ -7,7 +7,7 @@ use deno::Op;
 use deno::OpResult;
 use deno::PinnedBuf;
 use serde::Serialize;
-use futures::future::Future;
+use tokio::prelude::Future;
 
 pub type DIDOpResult = OpResult<DIDError>;
 

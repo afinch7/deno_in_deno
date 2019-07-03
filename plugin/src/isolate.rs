@@ -1,6 +1,7 @@
 use crate::dispatch::get_dispatcher;
 use crate::errors::new_error;
 use crate::errors::DIDError;
+use crate::errors::DIDResult;
 use crate::util::wrap_op;
 use crate::util::serialize_and_wrap;
 use crate::util::serialize_response;
@@ -8,12 +9,22 @@ use crate::msg::ResourceId;
 use crate::msg::ResourceIdResponse;
 use crate::msg::EmptyResponse;
 use deno::Op;
+use deno::Buf;
 use deno::CoreOp;
 use deno::PinnedBuf;
 use deno::Isolate;
 use deno::StartupData;
-use futures::Future;
-use futures::Async;
+use deno::JSError;
+use futures::future::Future as NewFuture;
+use futures::future::FutureExt;
+use futures::future::TryFuture;
+use futures::future::TryFutureExt;
+use futures::task::Poll;
+use futures::task::Context;
+use futures::compat::Compat;
+use futures::compat::Future01CompatExt;
+use tokio::prelude::future::Future;
+use tokio::prelude::Async;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::cell::RefCell;
@@ -21,6 +32,7 @@ use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
 use std::sync::Mutex;
 use std::sync::Arc;
+use std::pin::Pin;
 
 lazy_static! {
     static ref NEXT_STARTUP_DATA_ID: AtomicU32 = AtomicU32::new(1);
@@ -92,27 +104,30 @@ fn op_new_isolate_inner(
     isolate_rid
 }
 
+#[derive(Deserialize)]
+struct IsolateIsCompleteOptions {
+    pub rid: u32,
+}
+
 struct IsolateWorker {
     pub rid: u32,
 }
 
-impl Future for IsolateWorker {
-    type Item = ();
-    type Error = DIDError;
+impl NewFuture for IsolateWorker {
+    type Output = DIDResult<Buf>;
 
-    fn poll(&mut self) -> Result<Async<()>, Self::Error> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         let lock = ISOLATE_MAP.lock().unwrap();
         let i = lock.get(&self.rid).unwrap();
         let mut isolate = i.lock().unwrap();
-        isolate
-            .poll()
-            .map_err(|err| new_error(&format!("{:#?}", err)))
+        match isolate.poll() {
+            Ok(r) => match r {
+                Async::Ready(_) => Poll::Ready(Ok(serialize_response(EmptyResponse))),
+                Async::NotReady => Poll::Pending,
+            },
+            Err(err) => Poll::Ready(Err(new_error(&format!("{:#?}", err)))),
+        }
     }
-}
-
-#[derive(Deserialize)]
-struct IsolateIsCompleteOptions {
-    pub rid: u32,
 }
 
 pub fn op_isolate_is_complete(
@@ -123,14 +138,10 @@ pub fn op_isolate_is_complete(
         let data_str = std::str::from_utf8(&data[..]).unwrap();
         let options: IsolateIsCompleteOptions = serde_json::from_str(data_str).unwrap();
 
-        let isolate_worker = IsolateWorker {
+        let op = IsolateWorker {
             rid: options.rid,
         };
-
-        let op = Box::new(isolate_worker.and_then(|_| {
-            Ok(serialize_response(EmptyResponse))
-        }));
-        Ok(Op::Async(op))
+        Ok(Op::Async(Box::new(op.compat())))
     }, data, zero_copy)
 }
 
@@ -174,7 +185,7 @@ pub fn op_isolate_execute(
         let data_str = std::str::from_utf8(&data[..]).unwrap();
         let options: IsolateExecuteOptions = serde_json::from_str(data_str).unwrap();
 
-        let op = Box::new(futures::future::lazy(move || {
+        let op = Box::new(tokio::prelude::future::lazy(move || {
             let lock = ISOLATE_MAP.lock().unwrap();
             let isolate = lock.get(&options.rid).unwrap();
             let mut isolate_lock = isolate.lock().unwrap();
@@ -183,6 +194,7 @@ pub fn op_isolate_execute(
                 Err(err) => Err(new_error(&format!("{:#?}", err))),
             }
         }));
+
         Ok(Op::Async(op))
     }, data, zero_copy)
 }

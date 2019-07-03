@@ -1,5 +1,5 @@
-use crate::errors::new_error;
 use crate::errors::DIDError;
+use crate::errors::DIDResult;
 use crate::msg::EmptyResponse;
 use crate::msg::ResourceId;
 use crate::util::wrap_op;
@@ -7,15 +7,20 @@ use crate::util::serialize_response;
 use crate::util::serialize_and_wrap;
 use deno::PinnedBuf;
 use deno::CoreOp;
+use deno::Buf;
 use deno::Op;
-use tokio::sync::oneshot;
-use tokio::sync::mpsc::channel;
-use tokio::sync::mpsc::Receiver;
-use tokio::sync::mpsc::Sender;
-use futures::executor::enter;
-use futures::Async;
-use futures::Future;
-use futures::Stream;
+use futures::channel::oneshot;
+use futures::channel::mpsc::channel;
+use futures::channel::mpsc::Receiver;
+use futures::channel::mpsc::Sender;
+use futures::compat::Compat;
+use futures::compat::Future01CompatExt;
+use futures::future::Future;
+use futures::future::TryFutureExt;
+use futures::stream::Stream;
+use futures::stream::StreamExt;
+use futures::task::Poll;
+use futures::task::Context;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -24,6 +29,7 @@ use std::sync::atomic::Ordering;
 use std::sync::RwLock;
 use std::sync::Mutex;
 use std::sync::Arc;
+use std::pin::Pin;
 
 lazy_static! {
     static ref NEXT_DISPATCHER_ID: AtomicU32 = AtomicU32::new(1);
@@ -53,12 +59,12 @@ pub fn get_dispatcher(dispatcher_rid: ResourceId) -> Arc<Box<Dispatcher>> {
 type StandardDispatchReq = (u32, Vec<u8>, Option<Vec<u8>>);
 type StandardDispatchReqReceiver = Receiver<StandardDispatchReq>;
 type StandardDispatchReqSender = Sender<StandardDispatchReq>;
-type StandardDispatchReqChannels = (StandardDispatchReqReceiver, StandardDispatchReqSender);
 
 struct StandardDispatcher {
     pub next_cmd_id: AtomicU32,
     pub res_senders: Arc<RwLock<HashMap<u32, oneshot::Sender<CoreOp>>>>,
-    pub req_channels: Arc<Mutex<StandardDispatchReqChannels>>,
+    pub req_receiver: Arc<Mutex<StandardDispatchReqReceiver>>,
+    pub req_sender: Arc<Mutex<StandardDispatchReqSender>>,
 }
 
 impl StandardDispatcher {
@@ -67,7 +73,8 @@ impl StandardDispatcher {
         Self {
             next_cmd_id: AtomicU32::new(0),
             res_senders: Arc::new(RwLock::new(HashMap::new())),
-            req_channels: Arc::new(Mutex::new((req_reciever, req_sender))),
+            req_receiver: Arc::new(Mutex::new(req_reciever)),
+            req_sender: Arc::new(Mutex::new(req_sender)),
         }
     }
 }
@@ -75,12 +82,12 @@ impl StandardDispatcher {
 impl Dispatcher for StandardDispatcher {
     fn dispatch(&self, data: &[u8], zero_copy: Option<PinnedBuf>) -> CoreOp {
         let cmd_id = self.next_cmd_id.fetch_add(1, Ordering::SeqCst);
-        let (res_sender, res_reciever) = oneshot::channel::<CoreOp>();
+        let (res_sender, mut res_reciever) = oneshot::channel::<CoreOp>();
         let mut lock = self.res_senders.write().unwrap();
         lock.insert(cmd_id, res_sender);
-        let mut channels = self.req_channels.lock().unwrap();
-        channels.1.try_send((cmd_id, data.to_vec(), zero_copy.map(|v| v.to_vec()))).unwrap();
-        res_reciever.wait().unwrap()
+        let mut sender = self.req_sender.lock().unwrap();
+        sender.try_send((cmd_id, data.to_vec(), zero_copy.map(|v| v.to_vec()))).unwrap();
+        res_reciever.try_recv().unwrap().unwrap()
     }
 }
 
@@ -135,20 +142,26 @@ struct StandardDispatcherWaitForDispatchResponse {
 }
 
 struct RecvWorker {
-    rid: u32,
+    pub rid: u32,
 }
 
 impl Future for RecvWorker {
-    type Item = StandardDispatchReq;
-    type Error = DIDError;
+    type Output = DIDResult<Buf>;
 
-    fn poll(&mut self) -> Result<Async<Self::Item>, Self::Error> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         let lock = STANDARD_DISPATCHER_MAP.read().unwrap();
         let dispatcher = lock.get(&self.rid).unwrap();
-        let mut channels = dispatcher.req_channels.lock().unwrap();
-        channels.0.poll()
-            .map_err(|err| new_error(&format!("{:#?}", err)))
-            .and_then(|result| Ok(result.map(|result| result.unwrap())))
+        let mut recv = dispatcher.req_receiver.lock().unwrap();
+        recv.poll_next_unpin(cx).map(|result| {
+            match result {
+                Some(req) => Ok(serialize_response(StandardDispatcherWaitForDispatchResponse {
+                    cmd_id: req.0,
+                    data: req.1,
+                    zero_copy: req.2,
+                })),
+                None => panic!("REQ STREAM ENDED"),
+            }
+        })
     }
 }
 
@@ -159,19 +172,12 @@ pub fn op_standard_dispatcher_wait_for_dispatch(
     wrap_op(|data, _zero_copy| {
         let data_str = std::str::from_utf8(&data[..]).unwrap();
         let options: StandardDispatcherWaitForDispatchOptions = serde_json::from_str(data_str).unwrap();
-
-        let worker = RecvWorker {
+        
+        let op = RecvWorker {
             rid: options.rid,
         };
-        let op = Box::new(worker
-            .and_then(|req| {
-                Ok(serialize_response(StandardDispatcherWaitForDispatchResponse {
-                    cmd_id: req.0,
-                    data: req.1.clone(),
-                    zero_copy: req.2.clone(),
-                }))
-            }));
-        Ok(Op::Async(op))
+
+        Ok(Op::Async(Box::new(op.compat())))
     }, data, zero_copy)
 }
 

@@ -5,11 +5,12 @@ const { openPlugin, pluginFilename } = Deno;
 
 const manifest_path = join(dirname(import.meta.url), "Cargo.toml");
 
+/*
 const buildResult = build({
   manifest_path
 });
+*/
 
-/*
 // Load from manual build
 let url = new URL(import.meta.url);
 const path = join(url.pathname, "../../target/debug")
@@ -21,7 +22,6 @@ const buildResult = {
     }
   ]
 }
-*/
 
 // We could also search through the artifacts list here to find something more specific if we wanted.
 const plugin = openPlugin(

@@ -1,6 +1,5 @@
 use crate::dispatch::get_dispatcher;
 use crate::errors::new_error;
-use crate::errors::DIDError;
 use crate::errors::DIDResult;
 use crate::util::wrap_op;
 use crate::util::serialize_sync_result;
@@ -9,21 +8,15 @@ use crate::util::DIDOp;
 use crate::msg::ResourceId;
 use crate::msg::ResourceIdResponse;
 use crate::msg::EmptyResponse;
-use deno::Op;
 use deno::Buf;
-use deno::CoreOp;
 use deno::PinnedBuf;
 use deno::Isolate;
 use deno::StartupData;
-use deno::JSError;
 use deno::plugins::PluginOp;
 use futures::future::Future as NewFuture;
 use futures::future::FutureExt;
-use futures::future::TryFuture;
-use futures::future::TryFutureExt;
 use futures::task::Poll;
 use futures::task::Context;
-use futures::compat::Compat;
 use futures::channel::oneshot::channel;
 use tokio::prelude::future::Future;
 use tokio::prelude::Async;
@@ -33,6 +26,7 @@ use std::cell::RefCell;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
 use std::sync::Mutex;
+use std::sync::RwLock;
 use std::sync::Arc;
 use std::pin::Pin;
 
@@ -40,7 +34,7 @@ lazy_static! {
     static ref NEXT_STARTUP_DATA_ID: AtomicU32 = AtomicU32::new(1);
     static ref STARTUP_DATA_MAP: Mutex<HashMap<u32, RefCell<Vec<u8>>>> = Mutex::new(HashMap::new());
     static ref NEXT_ISOLATE_ID: AtomicU32 = AtomicU32::new(1);
-    static ref ISOLATE_MAP: Mutex<HashMap<u32, Arc<Mutex<Isolate>>>> = Mutex::new(HashMap::new());
+    static ref ISOLATE_MAP: RwLock<HashMap<u32, Arc<Mutex<Isolate>>>> = RwLock::new(HashMap::new());
 }
 
 pub fn op_new_startup_data(
@@ -101,7 +95,7 @@ fn op_new_isolate_inner(
 ) -> ResourceId {
     let isolate_rid = NEXT_ISOLATE_ID.fetch_add(1, Ordering::SeqCst);
     let isolate = Isolate::new(startup_data, will_snapshot);
-    let mut lock = ISOLATE_MAP.lock().unwrap();
+    let mut lock = ISOLATE_MAP.write().unwrap();
     lock.insert(isolate_rid, Arc::new(Mutex::new(isolate)));
     isolate_rid
 }
@@ -118,8 +112,8 @@ struct IsolateWorker {
 impl NewFuture for IsolateWorker {
     type Output = DIDResult<Buf>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        let lock = ISOLATE_MAP.lock().unwrap();
+    fn poll(self: Pin<&mut Self>, _cx: &mut Context) -> Poll<Self::Output> {
+        let lock = ISOLATE_MAP.read().unwrap();
         let i = lock.get(&self.rid).unwrap();
         let mut isolate = i.lock().unwrap();
         match isolate.poll() {
@@ -161,7 +155,7 @@ pub fn op_isolate_set_dispatcher(
         let data_str = std::str::from_utf8(&data[..]).unwrap();
         let options: IsolateSetDispatcherOptions = serde_json::from_str(data_str).unwrap();
 
-        let lock = ISOLATE_MAP.lock().unwrap();
+        let lock = ISOLATE_MAP.read().unwrap();
         let isolate = lock.get(&options.rid).unwrap();
         let dispatcher = get_dispatcher(options.dispatcher_rid);
         let mut isolate_lock = isolate.lock().unwrap();
@@ -189,14 +183,15 @@ pub fn op_isolate_execute(
 
         let (sender, receiver) = channel::<DIDResult<Buf>>();
         std::thread::spawn(move || {
-            let lock = ISOLATE_MAP.lock().unwrap();
+            let lock = ISOLATE_MAP.read().unwrap();
             let isolate = lock.get(&options.rid).unwrap();
             let mut isolate_lock = isolate.lock().unwrap();
             let result = match isolate_lock.execute(&options.filename, &options.source) {
                 Ok(_) => Ok(serialize_response(EmptyResponse)),
                 Err(err) => Err(new_error(&format!("{:#?}", err))),
             };
-            sender.send(result);
+            dbg!("EXECUTE DONE");
+            assert!(sender.send(result).is_ok());
         });
 
         let op = async {

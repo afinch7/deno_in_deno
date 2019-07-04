@@ -1,4 +1,3 @@
-use crate::errors::DIDError;
 use crate::errors::DIDResult;
 use crate::msg::EmptyResponse;
 use crate::msg::ResourceId;
@@ -8,24 +7,20 @@ use crate::util::serialize_response;
 use crate::util::serialize_sync_result;
 use deno::PinnedBuf;
 use deno::CoreOp;
-use deno::Buf;
 use deno::Op;
+use deno::Buf;
 use deno::plugins::PluginOp;
 use futures::channel::oneshot;
-use futures::channel::mpsc::channel;
-use futures::channel::mpsc::Receiver;
-use futures::channel::mpsc::Sender;
-use futures::compat::Compat;
 use futures::future::Future;
 use futures::future::FutureExt;
 use futures::future::TryFutureExt;
-use futures::stream::Stream;
-use futures::stream::StreamExt;
 use futures::task::Poll;
 use futures::task::Context;
+use tokio::prelude::future::Future as OldFuture;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
 use std::sync::RwLock;
@@ -35,7 +30,7 @@ use std::pin::Pin;
 
 lazy_static! {
     static ref NEXT_DISPATCHER_ID: AtomicU32 = AtomicU32::new(1);
-    static ref DISPATCHER_MAP: RwLock<HashMap<u32, Arc<Box<Dispatcher>>>> = RwLock::new(HashMap::new());
+    static ref DISPATCHER_MAP: RwLock<HashMap<u32, Arc<Box<dyn Dispatcher>>>> = RwLock::new(HashMap::new());
     static ref NEXT_STANDARD_DISPATCHER_ID: AtomicU32 = AtomicU32::new(1);
     static ref STANDARD_DISPATCHER_MAP: RwLock<HashMap<u32, Arc<StandardDispatcher>>> = RwLock::new(HashMap::new());
 }
@@ -45,38 +40,34 @@ pub trait Dispatcher: Send + Sync {
     fn dispatch(&self, data: &[u8], zero_copy: Option<PinnedBuf>) -> CoreOp;
 }
 
-pub fn insert_dispatcher(dispatcher: Arc<Box<Dispatcher>>) -> ResourceId {
+pub fn insert_dispatcher(dispatcher: Arc<Box<dyn Dispatcher>>) -> ResourceId {
     let rid = NEXT_DISPATCHER_ID.fetch_add(1, Ordering::SeqCst);
     let mut lock = DISPATCHER_MAP.write().unwrap();
     lock.insert(rid, dispatcher);
     rid
 }
 
-pub fn get_dispatcher(dispatcher_rid: ResourceId) -> Arc<Box<Dispatcher>> {
+pub fn get_dispatcher(dispatcher_rid: ResourceId) -> Arc<Box<dyn Dispatcher>> {
     let lock = DISPATCHER_MAP.read().unwrap();
     let dispatcher_ref = lock.get(&dispatcher_rid).unwrap();
     dispatcher_ref.clone()
 }
 
 type StandardDispatchReq = (u32, Vec<u8>, Option<Vec<u8>>);
-type StandardDispatchReqReceiver = Receiver<StandardDispatchReq>;
-type StandardDispatchReqSender = Sender<StandardDispatchReq>;
+type StandardDispatchReqQueue= VecDeque<StandardDispatchReq>;
 
 struct StandardDispatcher {
     pub next_cmd_id: AtomicU32,
     pub res_senders: Arc<RwLock<HashMap<u32, oneshot::Sender<CoreOp>>>>,
-    pub req_receiver: Arc<Mutex<StandardDispatchReqReceiver>>,
-    pub req_sender: Arc<Mutex<StandardDispatchReqSender>>,
+    pub req_queue: Arc<Mutex<StandardDispatchReqQueue>>,
 }
 
 impl StandardDispatcher {
     pub fn new() -> Self {
-        let (req_sender, req_reciever) = channel::<StandardDispatchReq>(1024);
         Self {
             next_cmd_id: AtomicU32::new(0),
             res_senders: Arc::new(RwLock::new(HashMap::new())),
-            req_receiver: Arc::new(Mutex::new(req_reciever)),
-            req_sender: Arc::new(Mutex::new(req_sender)),
+            req_queue: Arc::new(Mutex::new(VecDeque::new())),
         }
     }
 }
@@ -84,15 +75,15 @@ impl StandardDispatcher {
 impl Dispatcher for StandardDispatcher {
     fn dispatch(&self, data: &[u8], zero_copy: Option<PinnedBuf>) -> CoreOp {
         let cmd_id = self.next_cmd_id.fetch_add(1, Ordering::SeqCst);
-        let (res_sender, mut res_reciever) = oneshot::channel::<CoreOp>();
+        let (res_sender, res_reciever) = oneshot::channel::<CoreOp>();
         {
             let mut lock = self.res_senders.write().unwrap();
             lock.insert(cmd_id, res_sender);
-            let mut sender = self.req_sender.lock().unwrap();
-            sender.try_send((cmd_id, data.to_vec(), zero_copy.map(|v| v.to_vec()))).unwrap();
+            let mut queue = self.req_queue.lock().unwrap();
+            queue.push_back((cmd_id, data.to_vec(), zero_copy.map(|v| v.to_vec())));
         }
-        dbg!("DISPATCH WAITING FOR RES");
-        res_reciever.try_recv().unwrap().unwrap()
+        dbg!("DISPATCH WAITING FOR RESPONSE");
+        res_reciever.boxed().compat().wait().unwrap()
     }
 }
 
@@ -117,18 +108,13 @@ pub fn op_new_standard_dispatcher(
         let dispatcher = Arc::new(StandardDispatcher::new());
         let mut lock = STANDARD_DISPATCHER_MAP.write().unwrap();
         lock.insert(std_rid, dispatcher.clone());
-        let rid = insert_dispatcher(Arc::new(Box::new(dispatcher) as Box<Dispatcher>));
+        let rid = insert_dispatcher(Arc::new(Box::new(dispatcher) as Box<dyn Dispatcher>));
         
         serialize_sync_result(NewStandardDispatcherResponse {
             std_dispatcher_rid: std_rid,
             dispatcher_rid: rid,
         })
     }, data, zero_copy)
-}
-
-lazy_static! {
-    static ref NEXT_RES_SENDER_ID: AtomicU32 = AtomicU32::new(0);
-    static ref RES_SENDER_MAP: RwLock<HashMap<u32, Arc<Box<Dispatcher>>>> = RwLock::new(HashMap::new());
 }
 
 #[derive(Deserialize)]
@@ -153,20 +139,21 @@ struct RecvWorker {
 impl Future for RecvWorker {
     type Output = DIDResult<Buf>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, _cx: &mut Context) -> Poll<Self::Output> {
+        dbg!("PRE RECV POLL");
         let lock = STANDARD_DISPATCHER_MAP.read().unwrap();
         let dispatcher = lock.get(&self.rid).unwrap();
-        let mut recv = dispatcher.req_receiver.lock().unwrap();
-        recv.poll_next_unpin(cx).map(|result| {
-            match result {
-                Some(req) => Ok(serialize_response(StandardDispatcherWaitForDispatchResponse {
-                    cmd_id: req.0,
-                    data: req.1,
-                    zero_copy: req.2,
-                })),
-                None => panic!("REQ STREAM ENDED"),
-            }
-        })
+        let mut queue = dispatcher.req_queue.lock().unwrap();
+        let result = match queue.pop_front() {
+            Some(req) => Poll::Ready(Ok(serialize_response(StandardDispatcherWaitForDispatchResponse {
+                cmd_id: req.0,
+                data: req.1,
+                zero_copy: req.2,
+            }))),
+            None => Poll::Pending,
+        };
+        dbg!("POST RECV POLL");
+        result
     }
 }
 

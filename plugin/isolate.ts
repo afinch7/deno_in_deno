@@ -71,6 +71,7 @@ export class Isolate {
                 ),
             ),
         );
+        await this.run();
     }
 
     async run(): Promise<void> {

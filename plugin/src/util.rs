@@ -1,10 +1,7 @@
-use crate::errors::DIDError;
 use crate::errors::DIDResult;
 use crate::msg::DIDResponse;
 use crate::msg::EmptyResponse;
 use deno::Buf;
-use deno::CoreOp;
-use deno::Op;
 use deno::PinnedBuf;
 use deno::plugins::PluginOp;
 use futures::future::Future;

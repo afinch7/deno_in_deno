@@ -2,20 +2,22 @@ use crate::errors::DIDError;
 use crate::errors::DIDResult;
 use crate::msg::EmptyResponse;
 use crate::msg::ResourceId;
+use crate::util::DIDOp;
 use crate::util::wrap_op;
 use crate::util::serialize_response;
-use crate::util::serialize_and_wrap;
+use crate::util::serialize_sync_result;
 use deno::PinnedBuf;
 use deno::CoreOp;
 use deno::Buf;
 use deno::Op;
+use deno::plugins::PluginOp;
 use futures::channel::oneshot;
 use futures::channel::mpsc::channel;
 use futures::channel::mpsc::Receiver;
 use futures::channel::mpsc::Sender;
 use futures::compat::Compat;
-use futures::compat::Future01CompatExt;
 use futures::future::Future;
+use futures::future::FutureExt;
 use futures::future::TryFutureExt;
 use futures::stream::Stream;
 use futures::stream::StreamExt;
@@ -83,10 +85,13 @@ impl Dispatcher for StandardDispatcher {
     fn dispatch(&self, data: &[u8], zero_copy: Option<PinnedBuf>) -> CoreOp {
         let cmd_id = self.next_cmd_id.fetch_add(1, Ordering::SeqCst);
         let (res_sender, mut res_reciever) = oneshot::channel::<CoreOp>();
-        let mut lock = self.res_senders.write().unwrap();
-        lock.insert(cmd_id, res_sender);
-        let mut sender = self.req_sender.lock().unwrap();
-        sender.try_send((cmd_id, data.to_vec(), zero_copy.map(|v| v.to_vec()))).unwrap();
+        {
+            let mut lock = self.res_senders.write().unwrap();
+            lock.insert(cmd_id, res_sender);
+            let mut sender = self.req_sender.lock().unwrap();
+            sender.try_send((cmd_id, data.to_vec(), zero_copy.map(|v| v.to_vec()))).unwrap();
+        }
+        dbg!("DISPATCH WAITING FOR RES");
         res_reciever.try_recv().unwrap().unwrap()
     }
 }
@@ -106,7 +111,7 @@ struct NewStandardDispatcherResponse {
 pub fn op_new_standard_dispatcher(
     data: &[u8],
     zero_copy: Option<PinnedBuf>,
-) -> CoreOp {
+) -> PluginOp {
     wrap_op(|_data, _zero_copy| {
         let std_rid = NEXT_STANDARD_DISPATCHER_ID.fetch_add(1, Ordering::SeqCst);
         let dispatcher = Arc::new(StandardDispatcher::new());
@@ -114,7 +119,7 @@ pub fn op_new_standard_dispatcher(
         lock.insert(std_rid, dispatcher.clone());
         let rid = insert_dispatcher(Arc::new(Box::new(dispatcher) as Box<Dispatcher>));
         
-        serialize_and_wrap(NewStandardDispatcherResponse {
+        serialize_sync_result(NewStandardDispatcherResponse {
             std_dispatcher_rid: std_rid,
             dispatcher_rid: rid,
         })
@@ -168,7 +173,7 @@ impl Future for RecvWorker {
 pub fn op_standard_dispatcher_wait_for_dispatch(
     data: &[u8],
     zero_copy: Option<PinnedBuf>,
-) -> CoreOp {
+) -> PluginOp {
     wrap_op(|data, _zero_copy| {
         let data_str = std::str::from_utf8(&data[..]).unwrap();
         let options: StandardDispatcherWaitForDispatchOptions = serde_json::from_str(data_str).unwrap();
@@ -177,7 +182,7 @@ pub fn op_standard_dispatcher_wait_for_dispatch(
             rid: options.rid,
         };
 
-        Ok(Op::Async(Box::new(op.compat())))
+        Ok(DIDOp::Async(op.boxed()))
     }, data, zero_copy)
 }
 
@@ -190,7 +195,7 @@ struct StandardDispatcherRespondOptions {
 pub fn op_standard_dispatcher_respond(
     data: &[u8],
     zero_copy: Option<PinnedBuf>,
-) -> CoreOp {
+) -> PluginOp {
     wrap_op(|data, zero_copy| {
         let data_str = std::str::from_utf8(&data[..]).unwrap();
         let options: StandardDispatcherRespondOptions = serde_json::from_str(data_str).unwrap();
@@ -201,7 +206,7 @@ pub fn op_standard_dispatcher_respond(
         match zero_copy {
             Some(buf) => {
                 assert!(sender.send(Op::Sync(buf[..].into())).is_ok());
-                serialize_and_wrap(EmptyResponse)
+                serialize_sync_result(EmptyResponse)
             },
             None => {
                 panic!("Promise returns not implemented yet!");

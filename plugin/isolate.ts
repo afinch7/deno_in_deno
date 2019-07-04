@@ -71,10 +71,9 @@ export class Isolate {
                 ),
             ),
         );
-        await this.run();
     }
 
-    private async run(): Promise<void> {
+    async run(): Promise<void> {
         await wrapAsyncOpDecode(
             isolateIsComplete.dispatch(
                 encodeMessage(
@@ -84,6 +83,5 @@ export class Isolate {
                 ),
             ),
         );
-        console.log("ISOLATE IS COMPLETE");
     }
 }

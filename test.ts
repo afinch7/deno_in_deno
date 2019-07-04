@@ -24,7 +24,13 @@ testDispatcher.ondispatch = (data: Uint8Array, zero_copy?: Uint8Array): Uint8Arr
     return response;
 };
 
-isolate.execute(
-    source,
-);
+async function main() {
+    await isolate.execute(
+        source,
+    );
+    console.log("INIT EXECUTE COMPLETE");
+    await isolate.execute(
+        "main()",
+    );
+}
 

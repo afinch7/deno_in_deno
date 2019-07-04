@@ -3,8 +3,9 @@ use crate::errors::new_error;
 use crate::errors::DIDError;
 use crate::errors::DIDResult;
 use crate::util::wrap_op;
-use crate::util::serialize_and_wrap;
+use crate::util::serialize_sync_result;
 use crate::util::serialize_response;
+use crate::util::DIDOp;
 use crate::msg::ResourceId;
 use crate::msg::ResourceIdResponse;
 use crate::msg::EmptyResponse;
@@ -15,6 +16,7 @@ use deno::PinnedBuf;
 use deno::Isolate;
 use deno::StartupData;
 use deno::JSError;
+use deno::plugins::PluginOp;
 use futures::future::Future as NewFuture;
 use futures::future::FutureExt;
 use futures::future::TryFuture;
@@ -22,7 +24,7 @@ use futures::future::TryFutureExt;
 use futures::task::Poll;
 use futures::task::Context;
 use futures::compat::Compat;
-use futures::compat::Future01CompatExt;
+use futures::channel::oneshot::channel;
 use tokio::prelude::future::Future;
 use tokio::prelude::Async;
 use serde::Deserialize;
@@ -44,14 +46,14 @@ lazy_static! {
 pub fn op_new_startup_data(
     data: &[u8],
     zero_copy: Option<PinnedBuf>,
-) -> CoreOp {
+) -> PluginOp {
     wrap_op(|_data, zero_copy| {
         assert!(zero_copy.is_some());
         let startup_data = zero_copy.unwrap().to_vec();
         let startup_data_id = NEXT_STARTUP_DATA_ID.fetch_add(1, Ordering::SeqCst);
         let mut lock = STARTUP_DATA_MAP.lock().unwrap();
         lock.insert(startup_data_id, RefCell::new(startup_data));
-        serialize_and_wrap(ResourceIdResponse {
+        serialize_sync_result(ResourceIdResponse {
             rid: startup_data_id,
         })
     }, data, zero_copy)
@@ -66,7 +68,7 @@ struct NewIsolateOptions {
 pub fn op_new_isolate(
     data: &[u8],
     zero_copy: Option<PinnedBuf>,
-) -> CoreOp {
+) -> PluginOp {
     wrap_op(|data, _zero_copy| {
         let data_str = std::str::from_utf8(&data[..]).unwrap();
         let options: NewIsolateOptions = serde_json::from_str(data_str).unwrap();
@@ -77,13 +79,13 @@ pub fn op_new_isolate(
                 let cell = lock.get(&rid).unwrap().borrow();
                 let startup_data = StartupData::Snapshot(&cell);
                 let isolate_rid = op_new_isolate_inner(startup_data, options.will_snapshot);
-                serialize_and_wrap(ResourceIdResponse {
+                serialize_sync_result(ResourceIdResponse {
                     rid: isolate_rid,
                 })
             },
             None => {
                 let isolate_rid = op_new_isolate_inner(StartupData::None, options.will_snapshot);
-                serialize_and_wrap(ResourceIdResponse {
+                serialize_sync_result(ResourceIdResponse {
                     rid: isolate_rid,
                 })
             },
@@ -133,7 +135,7 @@ impl NewFuture for IsolateWorker {
 pub fn op_isolate_is_complete(
     data: &[u8],
     zero_copy: Option<PinnedBuf>,
-) -> CoreOp {
+) -> PluginOp {
     wrap_op(|data, _zero_copy| {
         let data_str = std::str::from_utf8(&data[..]).unwrap();
         let options: IsolateIsCompleteOptions = serde_json::from_str(data_str).unwrap();
@@ -141,7 +143,7 @@ pub fn op_isolate_is_complete(
         let op = IsolateWorker {
             rid: options.rid,
         };
-        Ok(Op::Async(Box::new(op.compat())))
+        Ok(DIDOp::Async(op.boxed()))
     }, data, zero_copy)
 }
 
@@ -154,7 +156,7 @@ struct IsolateSetDispatcherOptions {
 pub fn op_isolate_set_dispatcher(
     data: &[u8],
     zero_copy: Option<PinnedBuf>,
-) -> CoreOp {
+) -> PluginOp {
     wrap_op(|data, _zero_copy| {
         let data_str = std::str::from_utf8(&data[..]).unwrap();
         let options: IsolateSetDispatcherOptions = serde_json::from_str(data_str).unwrap();
@@ -166,7 +168,7 @@ pub fn op_isolate_set_dispatcher(
         isolate_lock.set_dispatch(move |data, zero_copy| {
             dispatcher.dispatch(data, zero_copy)
         });
-        serialize_and_wrap(EmptyResponse)
+        serialize_sync_result(EmptyResponse)
     }, data, zero_copy)
 }
 
@@ -180,21 +182,27 @@ struct IsolateExecuteOptions {
 pub fn op_isolate_execute(
     data: &[u8],
     zero_copy: Option<PinnedBuf>,
-) -> CoreOp {
+) -> PluginOp {
     wrap_op(|data, _zero_copy| {
         let data_str = std::str::from_utf8(&data[..]).unwrap();
         let options: IsolateExecuteOptions = serde_json::from_str(data_str).unwrap();
 
-        let op = Box::new(tokio::prelude::future::lazy(move || {
+        let (sender, receiver) = channel::<DIDResult<Buf>>();
+        std::thread::spawn(move || {
             let lock = ISOLATE_MAP.lock().unwrap();
             let isolate = lock.get(&options.rid).unwrap();
             let mut isolate_lock = isolate.lock().unwrap();
-            match isolate_lock.execute(&options.filename, &options.source) {
+            let result = match isolate_lock.execute(&options.filename, &options.source) {
                 Ok(_) => Ok(serialize_response(EmptyResponse)),
                 Err(err) => Err(new_error(&format!("{:#?}", err))),
-            }
-        }));
+            };
+            sender.send(result);
+        });
 
-        Ok(Op::Async(op))
+        let op = async {
+            receiver.await.unwrap()
+        }.boxed();
+
+        Ok(DIDOp::Async(op))
     }, data, zero_copy)
 }

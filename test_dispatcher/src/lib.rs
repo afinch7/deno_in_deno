@@ -5,6 +5,7 @@ use deno::PinnedBuf;
 use deno_in_deno::insert_dispatcher;
 use deno_in_deno::Dispatcher;
 use std::sync::Arc;
+use deno::plugins::PluginOp;
 
 #[macro_use]
 extern crate deno;
@@ -37,12 +38,12 @@ impl Dispatcher for TestDispatcher {
 pub fn op_new_test_dispatcher(
     _data: &[u8],
     _zero_copy: Option<PinnedBuf>,
-) -> CoreOp {
+) -> PluginOp {
     let dispatcher = TestDispatcher::new();
     let rid = insert_dispatcher(Arc::new(Box::new(dispatcher)));
 
     let result_json = serde_json::to_string(&rid).unwrap();
-    Op::Sync(result_json.as_bytes().into())
+    PluginOp::Sync(result_json.as_bytes().into())
 }
 
 declare_plugin_op!(new_test_dispatcher, op_new_test_dispatcher);

@@ -1,5 +1,5 @@
-#![feature(async_await)]
-use deno::CoreOp;
+#![feature(async_await, await_macro, futures_api)]
+use deno::plugins::PluginOp;
 use deno::PinnedBuf;
 
 #[macro_use]

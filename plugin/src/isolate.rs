@@ -8,21 +8,19 @@ use crate::util::DIDOp;
 use crate::msg::ResourceId;
 use crate::msg::ResourceIdResponse;
 use crate::msg::EmptyResponse;
+use deno::CoreOp;
 use deno::Buf;
 use deno::PinnedBuf;
 use deno::Isolate;
 use deno::StartupData;
-use deno::plugins::PluginOp;
-use futures::future::Future as NewFuture;
 use futures::future::FutureExt;
 use futures::task::Poll;
 use futures::task::Context;
 use futures::channel::oneshot::channel;
-use tokio::prelude::future::Future;
-use tokio::prelude::Async;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::cell::RefCell;
+use std::future::Future;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
 use std::sync::Mutex;
@@ -40,7 +38,7 @@ lazy_static! {
 pub fn op_new_startup_data(
     data: &[u8],
     zero_copy: Option<PinnedBuf>,
-) -> PluginOp {
+) -> CoreOp {
     wrap_op(|_data, zero_copy| {
         assert!(zero_copy.is_some());
         let startup_data = zero_copy.unwrap().to_vec();
@@ -62,7 +60,7 @@ struct NewIsolateOptions {
 pub fn op_new_isolate(
     data: &[u8],
     zero_copy: Option<PinnedBuf>,
-) -> PluginOp {
+) -> CoreOp {
     wrap_op(|data, _zero_copy| {
         let data_str = std::str::from_utf8(&data[..]).unwrap();
         let options: NewIsolateOptions = serde_json::from_str(data_str).unwrap();
@@ -109,19 +107,16 @@ struct IsolateWorker {
     pub rid: u32,
 }
 
-impl NewFuture for IsolateWorker {
+impl Future for IsolateWorker {
     type Output = DIDResult<Buf>;
 
-    fn poll(self: Pin<&mut Self>, _cx: &mut Context) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         let lock = ISOLATE_MAP.read().unwrap();
         let i = lock.get(&self.rid).unwrap();
         let mut isolate = i.lock().unwrap();
-        match isolate.poll() {
-            Ok(r) => match r {
-                Async::Ready(_) => Poll::Ready(Ok(serialize_response(EmptyResponse))),
-                Async::NotReady => Poll::Pending,
-            },
-            Err(err) => Poll::Ready(Err(new_error(&format!("{:#?}", err)))),
+        match isolate.poll_unpin(cx) {
+            Poll::Ready(_) => Poll::Ready(Ok(serialize_response(EmptyResponse))),
+            Poll::Pending => Poll::Pending,
         }
     }
 }
@@ -129,7 +124,7 @@ impl NewFuture for IsolateWorker {
 pub fn op_isolate_is_complete(
     data: &[u8],
     zero_copy: Option<PinnedBuf>,
-) -> PluginOp {
+) -> CoreOp {
     wrap_op(|data, _zero_copy| {
         let data_str = std::str::from_utf8(&data[..]).unwrap();
         let options: IsolateIsCompleteOptions = serde_json::from_str(data_str).unwrap();
@@ -150,7 +145,7 @@ struct IsolateSetDispatcherOptions {
 pub fn op_isolate_set_dispatcher(
     data: &[u8],
     zero_copy: Option<PinnedBuf>,
-) -> PluginOp {
+) -> CoreOp {
     wrap_op(|data, _zero_copy| {
         let data_str = std::str::from_utf8(&data[..]).unwrap();
         let options: IsolateSetDispatcherOptions = serde_json::from_str(data_str).unwrap();
@@ -176,12 +171,12 @@ struct IsolateExecuteOptions {
 pub fn op_isolate_execute(
     data: &[u8],
     zero_copy: Option<PinnedBuf>,
-) -> PluginOp {
+) -> CoreOp {
     wrap_op(|data, _zero_copy| {
         let data_str = std::str::from_utf8(&data[..]).unwrap();
         let options: IsolateExecuteOptions = serde_json::from_str(data_str).unwrap();
 
-        let (sender, receiver) = channel::<DIDResult<Buf>>();
+        let (sender, receiver) = futures::channel::oneshot::channel::<DIDResult<Buf>>();
         std::thread::spawn(move || {
             let lock = ISOLATE_MAP.read().unwrap();
             let isolate = lock.get(&options.rid).unwrap();
@@ -190,14 +185,12 @@ pub fn op_isolate_execute(
                 Ok(_) => Ok(serialize_response(EmptyResponse)),
                 Err(err) => Err(new_error(&format!("{:#?}", err))),
             };
-            dbg!("EXECUTE DONE");
             assert!(sender.send(result).is_ok());
         });
 
-        let op = async {
-            receiver.await.unwrap()
-        }.boxed();
-
-        Ok(DIDOp::Async(op))
+        Ok(DIDOp::Async(receiver.map(|result| match result {
+            Ok(v) => v,
+            Err(err) => Err(new_error(&format!("{:#?}", err))),
+        }).boxed()))
     }, data, zero_copy)
 }

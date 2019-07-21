@@ -9,18 +9,16 @@ use deno::PinnedBuf;
 use deno::CoreOp;
 use deno::Op;
 use deno::Buf;
-use deno::plugins::PluginOp;
 use futures::channel::oneshot;
-use futures::future::Future;
 use futures::future::FutureExt;
-use futures::future::TryFutureExt;
-use futures::task::Poll;
-use futures::task::Context;
-use tokio::prelude::future::Future as OldFuture;
+use futures::task::AtomicWaker;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::collections::VecDeque;
+use std::future::Future;
+use std::task::Context;
+use std::task::Poll;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
 use std::sync::RwLock;
@@ -60,6 +58,7 @@ struct StandardDispatcher {
     pub next_cmd_id: AtomicU32,
     pub res_senders: Arc<RwLock<HashMap<u32, oneshot::Sender<CoreOp>>>>,
     pub req_queue: Arc<Mutex<StandardDispatchReqQueue>>,
+    pub waker: AtomicWaker,
 }
 
 impl StandardDispatcher {
@@ -68,6 +67,7 @@ impl StandardDispatcher {
             next_cmd_id: AtomicU32::new(0),
             res_senders: Arc::new(RwLock::new(HashMap::new())),
             req_queue: Arc::new(Mutex::new(VecDeque::new())),
+            waker: AtomicWaker::new(),
         }
     }
 }
@@ -82,8 +82,8 @@ impl Dispatcher for StandardDispatcher {
             let mut queue = self.req_queue.lock().unwrap();
             queue.push_back((cmd_id, data.to_vec(), zero_copy.map(|v| v.to_vec())));
         }
-        dbg!("DISPATCH WAITING FOR RESPONSE");
-        res_reciever.boxed().compat().wait().unwrap()
+        self.waker.wake();
+        futures::executor::block_on(res_reciever).unwrap()
     }
 }
 
@@ -102,7 +102,7 @@ struct NewStandardDispatcherResponse {
 pub fn op_new_standard_dispatcher(
     data: &[u8],
     zero_copy: Option<PinnedBuf>,
-) -> PluginOp {
+) -> CoreOp {
     wrap_op(|_data, _zero_copy| {
         let std_rid = NEXT_STANDARD_DISPATCHER_ID.fetch_add(1, Ordering::SeqCst);
         let dispatcher = Arc::new(StandardDispatcher::new());
@@ -139,10 +139,10 @@ struct RecvWorker {
 impl Future for RecvWorker {
     type Output = DIDResult<Buf>;
 
-    fn poll(self: Pin<&mut Self>, _cx: &mut Context) -> Poll<Self::Output> {
-        dbg!("PRE RECV POLL");
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         let lock = STANDARD_DISPATCHER_MAP.read().unwrap();
         let dispatcher = lock.get(&self.rid).unwrap();
+        dispatcher.waker.register(cx.waker());
         let mut queue = dispatcher.req_queue.lock().unwrap();
         let result = match queue.pop_front() {
             Some(req) => Poll::Ready(Ok(serialize_response(StandardDispatcherWaitForDispatchResponse {
@@ -152,7 +152,6 @@ impl Future for RecvWorker {
             }))),
             None => Poll::Pending,
         };
-        dbg!("POST RECV POLL");
         result
     }
 }
@@ -160,7 +159,7 @@ impl Future for RecvWorker {
 pub fn op_standard_dispatcher_wait_for_dispatch(
     data: &[u8],
     zero_copy: Option<PinnedBuf>,
-) -> PluginOp {
+) -> CoreOp {
     wrap_op(|data, _zero_copy| {
         let data_str = std::str::from_utf8(&data[..]).unwrap();
         let options: StandardDispatcherWaitForDispatchOptions = serde_json::from_str(data_str).unwrap();
@@ -182,7 +181,7 @@ struct StandardDispatcherRespondOptions {
 pub fn op_standard_dispatcher_respond(
     data: &[u8],
     zero_copy: Option<PinnedBuf>,
-) -> PluginOp {
+) -> CoreOp {
     wrap_op(|data, zero_copy| {
         let data_str = std::str::from_utf8(&data[..]).unwrap();
         let options: StandardDispatcherRespondOptions = serde_json::from_str(data_str).unwrap();

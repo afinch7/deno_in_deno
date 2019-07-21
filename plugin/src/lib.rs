@@ -1,5 +1,5 @@
 #![feature(async_await, await_macro)]
-use deno::plugins::PluginOp;
+use deno::CoreOp;
 use deno::PinnedBuf;
 
 #[macro_use]
@@ -12,6 +12,7 @@ mod dispatch;
 mod errors;
 mod isolate;
 mod msg;
+mod tokio_util;
 mod util;
 
 pub use dispatch::insert_dispatcher;

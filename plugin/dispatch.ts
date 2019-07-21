@@ -35,6 +35,20 @@ export class StandardDispatcher implements Dispatcher {
         return this.rid_;
     }
 
+    async respond(cmd_id: number, response: Uint8Array) {
+        await wrapSyncOpDecode(
+            standardDispatcherRespond.dispatch(
+                encodeMessage(
+                    {
+                        rid: this.stdDispatcherRid,
+                        cmd_id: cmd_id,
+                    },
+                ),
+                response,
+            ),
+        );
+    }
+
     private async run() {
         while(true) {
             const request = await wrapAsyncOpDecode<StandardDispatcherWaitForDispatchResponse> (
@@ -46,11 +60,10 @@ export class StandardDispatcher implements Dispatcher {
                     ),
                 ),
             );
-            console.log("RECIEVED DISPATCH");
             const data = new Uint8Array(request.data);
             const zero_copy = request.zero_copy ? new Uint8Array(request.zero_copy) : undefined;
             const response = this.ondispatch(data, zero_copy);
-            await wrapAsyncOpDecode(
+            await wrapSyncOpDecode(
                 standardDispatcherRespond.dispatch(
                     encodeMessage(
                         {

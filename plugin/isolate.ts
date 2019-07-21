@@ -40,6 +40,7 @@ export class Isolate {
                 )
             )
         ).rid;
+        this.run();
     }
 
     get rid(): number {
@@ -71,7 +72,6 @@ export class Isolate {
                 ),
             ),
         );
-        await this.run();
     }
 
     async run(): Promise<void> {

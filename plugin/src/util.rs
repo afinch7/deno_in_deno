@@ -1,9 +1,10 @@
 use crate::errors::DIDResult;
 use crate::msg::DIDResponse;
 use crate::msg::EmptyResponse;
+use deno::Op;
 use deno::Buf;
+use deno::CoreOp;
 use deno::PinnedBuf;
-use deno::plugins::PluginOp;
 use futures::future::Future;
 use futures::future::FutureExt;
 use serde::Serialize;
@@ -19,9 +20,9 @@ pub type DIDOpResult = DIDResult<DIDOp>;
 
 pub type DIDOpFn = fn(&[u8], Option<PinnedBuf>) -> DIDOpResult;
 
-pub fn wrap_op(op: DIDOpFn, data: &[u8], zero_copy: Option<PinnedBuf>) -> PluginOp {
+pub fn wrap_op(op: DIDOpFn, data: &[u8], zero_copy: Option<PinnedBuf>) -> CoreOp {
     match op(data, zero_copy) {
-        Ok(DIDOp::Sync(buf)) => PluginOp::Sync(buf),
+        Ok(DIDOp::Sync(buf)) => Op::Sync(buf),
         Ok(DIDOp::Async(fut)) => {
             let result_fut = async {
                 match fut.await {
@@ -36,7 +37,7 @@ pub fn wrap_op(op: DIDOpFn, data: &[u8], zero_copy: Option<PinnedBuf>) -> Plugin
                     },
                 }
             }.boxed();
-            PluginOp::Async(result_fut)
+            Op::Async(result_fut)
         },
         Err(err) => {
             let result = DIDResponse::<EmptyResponse> {
@@ -44,7 +45,7 @@ pub fn wrap_op(op: DIDOpFn, data: &[u8], zero_copy: Option<PinnedBuf>) -> Plugin
                 data: None,
             };
             let result_json = serde_json::to_string(&result).unwrap();
-            PluginOp::Sync(result_json.as_bytes().into())
+            Op::Sync(result_json.as_bytes().into())
         }
     }
 }

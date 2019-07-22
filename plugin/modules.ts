@@ -3,6 +3,8 @@ import {
     newStdLoader,
     stdLoaderAwaitResolve,
     stdLoaderRespondResolve,
+    stdLoaderAwaitLoad,
+    stdLoaderRespondLoad,
 } from "./ops.ts";
 import { encodeMessage, wrapSyncOpDecode, wrapAsyncOpDecode, ResourceIdResponse } from "./util.ts";
 
@@ -55,8 +57,8 @@ export class StdLoader implements Loader {
     private readonly stdLoaderRid: number;
 
     constructor(
-        public onresolve: (specifier: string, referrer: string, is_root: boolean) => string,
-        public onload: (module_specifier: string) => SourceCodeInfo,
+        public onresolve: (specifier: string, referrer: string, isRoot: boolean) => string,
+        public onload: (moduleSpecifier: string) => SourceCodeInfo,
     ) {
         const response = wrapSyncOpDecode<NewStdLoaderResponse>(
             newStdLoader.dispatch(new Uint8Array(0)),
@@ -100,7 +102,7 @@ export class StdLoader implements Loader {
     private async runLoad() {
         while(true) {
             const request = await wrapAsyncOpDecode<StdLoaderAwaitLoadResponse>(
-                stdLoaderAwaitResolve.dispatch(
+                stdLoaderAwaitLoad.dispatch(
                     encodeMessage({
                         rid: this.stdLoaderRid,
                     }),
@@ -110,7 +112,7 @@ export class StdLoader implements Loader {
                 request.module_specifier,
             );
             await wrapSyncOpDecode(
-                stdLoaderRespondResolve.dispatch(
+                stdLoaderRespondLoad.dispatch(
                     encodeMessage({
                         rid: this.stdLoaderRid,
                         cmd_id: request.cmd_id,

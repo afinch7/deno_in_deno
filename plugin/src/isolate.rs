@@ -13,6 +13,8 @@ use deno::Buf;
 use deno::PinnedBuf;
 use deno::Isolate;
 use deno::StartupData;
+use deno::RecursiveLoad;
+use futures::future::TryFutureExt;
 use futures::future::FutureExt;
 use futures::task::Poll;
 use futures::task::Context;
@@ -176,7 +178,7 @@ pub fn op_isolate_execute(
         let data_str = std::str::from_utf8(&data[..]).unwrap();
         let options: IsolateExecuteOptions = serde_json::from_str(data_str).unwrap();
 
-        let (sender, receiver) = futures::channel::oneshot::channel::<DIDResult<Buf>>();
+        let (sender, receiver) = channel::<DIDResult<Buf>>();
         std::thread::spawn(move || {
             let lock = ISOLATE_MAP.read().unwrap();
             let isolate = lock.get(&options.rid).unwrap();
@@ -186,6 +188,55 @@ pub fn op_isolate_execute(
                 Err(err) => Err(new_error(&format!("{:#?}", err))),
             };
             assert!(sender.send(result).is_ok());
+        });
+
+        Ok(DIDOp::Async(receiver.map(|result| match result {
+            Ok(v) => v,
+            Err(err) => Err(new_error(&format!("{:#?}", err))),
+        }).boxed()))
+    }, data, zero_copy)
+}
+
+#[derive(Deserialize)]
+struct IsolateExecuteModuleOptions {
+    pub rid: u32,
+    pub loader_rid: u32,
+    pub module_store_rid: u32,
+    pub module_specifier: String,
+}
+
+pub fn op_isolate_execute_module(
+    data: &[u8],
+    zero_copy: Option<PinnedBuf>,
+) -> CoreOp {
+    wrap_op(|data, _zero_copy| {
+        let data_str = std::str::from_utf8(&data[..]).unwrap();
+        let options: IsolateExecuteModuleOptions = serde_json::from_str(data_str).unwrap();
+
+        let (sender, receiver) = channel::<DIDResult<Buf>>();
+        std::thread::spawn(move || {
+            let recursive_load = {
+                let lock = ISOLATE_MAP.read().unwrap();
+                let isolate = lock.get(&options.rid).unwrap();
+                let loader = crate::modules::get_loader(options.loader_rid);
+                let modules_store = crate::modules::get_module_store(options.module_store_rid);
+                RecursiveLoad::new(
+                    &options.module_specifier,
+                    loader,
+                    Arc::clone(isolate),
+                    modules_store,
+                )
+            };
+            let op = recursive_load.and_then(move |id| {
+                let lock = ISOLATE_MAP.read().unwrap();
+                let isolate = lock.get(&options.rid).unwrap();
+                let mut isolate = isolate.lock().unwrap();
+                futures::future::ready(match isolate.mod_evaluate(id) {
+                    Ok(_) => Ok(serialize_response(EmptyResponse)),
+                    Err(err) => Err(err),
+                })
+            }).map_err(|e| new_error(&format!("{:#?}", e))).boxed();
+            assert!(sender.send(crate::tokio_util::block_on(op)).is_ok());
         });
 
         Ok(DIDOp::Async(receiver.map(|result| match result {

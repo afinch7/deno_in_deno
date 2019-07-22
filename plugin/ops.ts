@@ -42,6 +42,7 @@ export const newIsolate = plugin.loadOp("new_isolate");
 export const isolateIsComplete = plugin.loadOp("isolate_is_complete");
 export const isolateSetDispatcher = plugin.loadOp("isolate_set_dispatcher");
 export const isolateExecute = plugin.loadOp("isolate_execute");
+export const isolateExecuteModule = plugin.loadOp("isolate_execute_module");
 
 // Module ops
 export const newModuleStore = plugin.loadOp("new_module_store");

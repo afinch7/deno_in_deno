@@ -1,4 +1,4 @@
-import { Isolate, StdDispatcher } from "./plugin/mod.ts";
+import { Isolate, StdDispatcher, ModuleStore, StdLoader } from "./plugin/mod.ts";
 
 const textEncoder = new TextEncoder();
 
@@ -7,6 +7,7 @@ const textDecoder = new TextDecoder();
 const isolate = new Isolate();
 
 const source = `
+
 const data = new Uint8Array([116, 101, 115, 116]);
 
 async function main() {
@@ -15,6 +16,8 @@ async function main() {
        Deno.core.print(\`GUEST RUNTIME RECIEVED RESPONSE \${response} \n\`);
     }
 }
+
+main();
 `;
 
 const dispatcher = new StdDispatcher();
@@ -28,12 +31,28 @@ dispatcher.ondispatch = (data: Uint8Array, zero_copy?: Uint8Array): Uint8Array =
     return response;
 };
 
+const moduleStore = new ModuleStore();
+
+const loader = new StdLoader(
+    (specifier, referrer, isRoot) => {
+        console.log(`RESOLVE REQUEST ${specifier} ${referrer} ${isRoot}`);
+        return "file:///testmod.js";
+    },
+    (moduleSpecifier) => {
+        console.log(`LOAD REQUEST ${moduleSpecifier}`);
+        return {
+            module_name: moduleSpecifier,
+            code: source,
+        };
+    },
+);
+
 async function main() {
-    await isolate.execute(
-        source,
-    );
-    await isolate.execute(
-        "main()",
+    console.log("PRE EXECUTE");
+    await isolate.executeModule(
+        "test",
+        loader,
+        moduleStore,
     );
 }
 

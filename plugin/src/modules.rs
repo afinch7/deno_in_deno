@@ -1,5 +1,4 @@
 use crate::errors::new_error;
-use crate::errors::DIDError;
 use crate::errors::DIDResult;
 use crate::msg::EmptyResponse;
 use crate::msg::ResourceId;
@@ -33,7 +32,6 @@ use std::sync::Arc;
 use std::task::Context;
 use std::task::Poll;
 use std::pin::Pin;
-use url::Url;
 
 lazy_static! {
     static ref NEXT_LOADER_ID: AtomicU32 = AtomicU32::new(1);
@@ -44,6 +42,34 @@ lazy_static! {
     static ref MODULE_STORE_MAP: RwLock<HashMap<u32, Arc<Mutex<Modules>>>> = RwLock::new(HashMap::new());
 }
 
+struct LoaderWrapper {
+    pub inner: Arc<Box<dyn Loader>>,
+}
+
+impl Loader for LoaderWrapper {
+    fn resolve(
+        &self,
+        specifier: &str,
+        referrer: &str,
+        is_root: bool,
+    ) -> Result<ModuleSpecifier, ErrBox> {
+        self.inner.as_ref().resolve(specifier, referrer, is_root)
+    }
+
+    fn load(
+        &self,
+        module_specifier: &ModuleSpecifier,
+    ) -> Pin<Box<SourceCodeInfoFuture>> {
+        self.inner.as_ref().load(module_specifier)
+    }
+}
+
+pub fn get_module_store(module_store_rid: ResourceId) -> Arc<Mutex<Modules>> {
+    let lock = MODULE_STORE_MAP.read().unwrap();
+    let module_store_ref = lock.get(&module_store_rid).unwrap();
+    Arc::clone(module_store_ref)
+}
+
 pub fn insert_loader(loader: Arc<Box<dyn Loader>>) -> ResourceId {
     let rid = NEXT_LOADER_ID.fetch_add(1, Ordering::SeqCst);
     let mut lock = LOADER_MAP.write().unwrap();
@@ -51,10 +77,12 @@ pub fn insert_loader(loader: Arc<Box<dyn Loader>>) -> ResourceId {
     rid
 }
 
-pub fn get_loader(loader_rid: ResourceId) -> Arc<Box<dyn Loader>> {
+pub fn get_loader(loader_rid: ResourceId) -> impl Loader {
     let lock = LOADER_MAP.read().unwrap();
     let loader_ref = lock.get(&loader_rid).unwrap();
-    Arc::clone(loader_ref)
+    LoaderWrapper {
+        inner: Arc::clone(loader_ref),
+    }
 }
 
 pub fn op_new_module_store(
@@ -138,7 +166,7 @@ impl Loader for StdLoader {
             let mut queue = self.load_req_queue.lock().unwrap();
             queue.push_back((cmd_id, module_specifier.as_url().to_string()));
         }
-        self.resolve_waker.wake();
+        self.load_waker.wake();
         res_reciever.map(|r| r.unwrap()).boxed()
     }
 }

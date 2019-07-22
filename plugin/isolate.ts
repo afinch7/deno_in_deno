@@ -1,6 +1,7 @@
-import { newIsolate, isolateIsComplete, isolateSetDispatcher, isolateExecute } from "./ops.ts";
+import { newIsolate, isolateIsComplete, isolateSetDispatcher, isolateExecute, isolateExecuteModule } from "./ops.ts";
 import { encodeMessage, wrapSyncOpDecode, wrapAsyncOpDecode, ResourceIdResponse } from "./util.ts";
 import { Dispatcher } from "./dispatch.ts";
+import { Loader, ModuleStore } from "./modules.ts";
 
 export interface StartupData {
     rid: number;
@@ -68,6 +69,21 @@ export class Isolate {
                         rid: this.rid,
                         source,
                         filename,
+                    },
+                ),
+            ),
+        );
+    }
+
+    async executeModule(moduleSpecifier: string, loader: Loader, module_store: ModuleStore) {
+        await wrapAsyncOpDecode(
+            isolateExecuteModule.dispatch(
+                encodeMessage(
+                    {
+                        rid: this.rid,
+                        loader_rid: loader.rid,
+                        module_store_rid: module_store.rid,
+                        module_specifier: moduleSpecifier,
                     },
                 ),
             ),

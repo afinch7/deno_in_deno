@@ -13,6 +13,7 @@ mod errors;
 mod isolate;
 mod modules;
 mod msg;
+mod tokio_util;
 mod util;
 
 pub use dispatch::insert_dispatcher;
@@ -30,6 +31,7 @@ declare_plugin_op!(new_isolate, isolate::op_new_isolate);
 declare_plugin_op!(isolate_is_complete, isolate::op_isolate_is_complete);
 declare_plugin_op!(isolate_set_dispatcher, isolate::op_isolate_set_dispatcher);
 declare_plugin_op!(isolate_execute, isolate::op_isolate_execute);
+declare_plugin_op!(isolate_execute_module, isolate::op_isolate_execute_module);
 
 // Module ops
 declare_plugin_op!(new_module_store, modules::op_new_module_store);

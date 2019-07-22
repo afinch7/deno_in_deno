@@ -32,9 +32,9 @@ const plugin = openPlugin(
 );
 
 // StandardDispatcher ops
-export const newStandardDispatcher = plugin.loadOp("new_standard_dispatcher");
-export const standardDispatcherWaitForDispatch = plugin.loadOp("standard_dispatcher_wait_for_dispatch");
-export const standardDispatcherRespond = plugin.loadOp("standard_dispatcher_respond");
+export const newStdDispatcher = plugin.loadOp("new_std_dispatcher");
+export const stdDispatcherWaitForDispatch = plugin.loadOp("std_dispatcher_wait_for_dispatch");
+export const stdDispatcherRespond = plugin.loadOp("std_dispatcher_respond");
 
 // Isolate ops
 export const newStartupData = plugin.loadOp("new_startup_data");
@@ -42,3 +42,11 @@ export const newIsolate = plugin.loadOp("new_isolate");
 export const isolateIsComplete = plugin.loadOp("isolate_is_complete");
 export const isolateSetDispatcher = plugin.loadOp("isolate_set_dispatcher");
 export const isolateExecute = plugin.loadOp("isolate_execute");
+
+// Module ops
+export const newModuleStore = plugin.loadOp("new_module_store");
+export const newStdLoader = plugin.loadOp("new_std_loader");
+export const stdLoaderAwaitResolve = plugin.loadOp("std_loader_await_resolve");
+export const stdLoaderRespondResolve = plugin.loadOp("std_loader_respond_resolve");
+export const stdLoaderAwaitLoad = plugin.loadOp("std_loader_await_load");
+export const stdLoaderRespondLoad = plugin.loadOp("std_loader_respond_load");

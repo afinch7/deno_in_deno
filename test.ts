@@ -1,4 +1,4 @@
-import { Isolate, StandardDispatcher } from "./plugin/mod.ts";
+import { Isolate, StdDispatcher } from "./plugin/mod.ts";
 
 const textEncoder = new TextEncoder();
 
@@ -17,7 +17,7 @@ async function main() {
 }
 `;
 
-const dispatcher = new StandardDispatcher();
+const dispatcher = new StdDispatcher();
 
 isolate.setDispatcher(dispatcher);
 

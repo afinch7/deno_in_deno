@@ -1,8 +1,30 @@
-import { newStdDispatcher, stdDispatcherWaitForDispatch, stdDispatcherRespond } from "./ops.ts";
+import { getDispatcherAccessorPtrs, newStdDispatcher, stdDispatcherWaitForDispatch, stdDispatcherRespond } from "./ops.ts";
 import { encodeMessage, wrapSyncOpDecode, wrapAsyncOpDecode, ResourceIdResponse } from "./util.ts";
 
 export interface Dispatcher {
     rid: number;
+}
+
+export interface DispatcherAccessorPtrs {
+    getDispatcher: number;
+    insertDispatcher: number;
+}
+
+interface GetDispatcherAccessorPtrsResponse {
+    get_dispatcher_ptr: number;
+    insert_dispatcher_ptr: number;
+}
+
+export function getDispatcherAccessors(): DispatcherAccessorPtrs {
+    const response = wrapSyncOpDecode<GetDispatcherAccessorPtrsResponse>(
+        getDispatcherAccessorPtrs.dispatch(
+            encodeMessage(""),
+        ),
+    );
+    return {
+        getDispatcher: response.get_dispatcher_ptr,
+        insertDispatcher: response.insert_dispatcher_ptr,
+    }
 }
 
 interface NewStandardDispatcherResponse {

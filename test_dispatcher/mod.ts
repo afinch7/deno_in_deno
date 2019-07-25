@@ -1,14 +1,30 @@
+import { getDispatcherAccessors, Dispatcher } from "../plugin/mod.ts";
+
 import { build } from "../../deno_std/cargo/mod.ts";
 import { join, dirname } from "https://deno.land/std/fs/path/mod.ts";
-import { Dispatcher } from "../plugin/mod.ts";
 
 const { openPlugin, pluginFilename } = Deno;
 
 const manifest_path = join(dirname(import.meta.url), "Cargo.toml");
+
+/*
 const buildResult = build({
-  manifest_path,
+  manifest_path
 });
-// We could also search through the artifacts list here to find something more specific if we wanted.
+*/
+
+// Load from manual build
+let url = new URL(import.meta.url);
+const path = join(url.pathname, "../../target/debug")
+const buildResult = {
+  output_root: path,
+  artifacts: [
+    {
+      output_name: "test_dispatcher",
+    }
+  ]
+}
+
 const plugin = openPlugin(
   join(
     buildResult.output_root,
@@ -16,21 +32,15 @@ const plugin = openPlugin(
   )
 );
 
+const newCustomDispatcher = plugin.loadOp("new_custom_dispatcher");
+
 const textEncoder = new TextEncoder();
-
-function encodeMessage(message: any): Uint8Array {
-    return textEncoder.encode(JSON.stringify(message));
-}
-
 const textDecoder = new TextDecoder();
 
-function decodeMessage<D = any>(message: Uint8Array): any {
-    return JSON.parse(textDecoder.decode(message));
-}
-
 type OpResponse = undefined | Uint8Array;
+type OpResponseAnySync = Promise<OpResponse> | OpResponse;
 
-function wrapSyncOp(response: Promise<OpResponse> | OpResponse): Uint8Array {
+export function wrapSyncOp(response: OpResponseAnySync): Uint8Array {
     if (response instanceof Uint8Array) {
         return response;
     } else {
@@ -38,24 +48,27 @@ function wrapSyncOp(response: Promise<OpResponse> | OpResponse): Uint8Array {
     }
 }
 
-const newTestDispatcher = plugin.loadOp("new_test_dispatcher");
-
-export class TestDispatcher implements Dispatcher {
+export class CustomDispatcher implements Dispatcher {
 
     private readonly rid_: number;
 
     constructor() {
-        this.rid_ = decodeMessage(
-            wrapSyncOp(
-                newTestDispatcher.dispatch(
-                    encodeMessage(""),
+        const response = JSON.parse(
+            textDecoder.decode(
+                wrapSyncOp(
+                    newCustomDispatcher.dispatch(
+                        textEncoder.encode(
+                            JSON.stringify(getDispatcherAccessors())
+                        )
+                    ),
                 ),
             ),
         );
+        this.rid_ = response.rid;
     }
 
     get rid(): number {
         return this.rid_;
     }
-}
 
+}

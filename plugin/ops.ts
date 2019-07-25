@@ -23,7 +23,6 @@ const buildResult = {
   ]
 }
 
-// We could also search through the artifacts list here to find something more specific if we wanted.
 const plugin = openPlugin(
   join(
     buildResult.output_root,
@@ -32,6 +31,7 @@ const plugin = openPlugin(
 );
 
 // StandardDispatcher ops
+export const getDispatcherAccessorPtrs = plugin.loadOp("get_dispatcher_accessor_ptrs");
 export const newStdDispatcher = plugin.loadOp("new_std_dispatcher");
 export const stdDispatcherWaitForDispatch = plugin.loadOp("std_dispatcher_wait_for_dispatch");
 export const stdDispatcherRespond = plugin.loadOp("std_dispatcher_respond");

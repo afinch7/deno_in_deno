@@ -1,49 +1,50 @@
-use deno::Buf;
-use deno::Op;
-use deno::CoreOp;
-use deno::PinnedBuf;
-use deno_in_deno::insert_dispatcher;
-use deno_in_deno::Dispatcher;
-use std::sync::Arc;
-use deno::plugins::PluginOp;
-
 #[macro_use]
 extern crate deno;
 
-struct TestDispatcher {
-}
+use deno::CoreOp;
+use deno::Op;
+use deno::PinnedBuf;
+use deno_in_deno::Dispatcher;
+use deno_in_deno::InsertDispatcherAccessor;
+use serde::Deserialize;
+use serde::Serialize;
+use std::sync::Arc;
 
-impl TestDispatcher {
-    pub fn new() -> Self {
-        Self {}
+struct CustomDispatcher;
+
+impl Dispatcher for CustomDispatcher {
+    fn dispatch(&self, data: &[u8], _zero_copy: Option<PinnedBuf>) -> CoreOp {
+        dbg!(data);
+        let result = b"test1234";
+        Op::Sync(result[..].into())
     }
 }
 
-impl Dispatcher for TestDispatcher {
-    fn dispatch(&self, data: &[u8], zero_copy: Option<PinnedBuf>) -> CoreOp {
-        if let Some(buf) = zero_copy {
-            let data_str = std::str::from_utf8(&data[..]).unwrap();
-            let buf_str = std::str::from_utf8(&buf[..]).unwrap();
-            println!(
-                "Hello from native bindings. data: {} | zero_copy: {}",
-                data_str, buf_str
-            );
-        }
-        let result = b"test";
-        let result_box: Buf = Box::new(*result);
-        Op::Sync(result_box)
-    }
+#[derive(Deserialize)]
+struct NewCustomDispatcherOptions {
+    pub getDispatcher: usize,
+    pub insertDispatcher: usize,
 }
 
-pub fn op_new_test_dispatcher(
-    _data: &[u8],
+#[derive(Serialize)]
+struct NewCustomDispatcherResponse {
+    pub rid: u32,
+}
+
+pub fn op_new_custom_dispatcher(
+    data: &[u8],
     _zero_copy: Option<PinnedBuf>,
-) -> PluginOp {
-    let dispatcher = TestDispatcher::new();
-    let rid = insert_dispatcher(Arc::new(Box::new(dispatcher)));
-
-    let result_json = serde_json::to_string(&rid).unwrap();
-    PluginOp::Sync(result_json.as_bytes().into())
+) -> CoreOp {
+    let data_str = std::str::from_utf8(&data[..]).unwrap();
+    let options: NewCustomDispatcherOptions = serde_json::from_str(data_str).unwrap();
+    let insert_dispatcher = unsafe { *(options.insertDispatcher as *const InsertDispatcherAccessor) };
+    let dispacher: Arc<Box<dyn Dispatcher>> = Arc::new(Box::new(CustomDispatcher));
+    let rid = insert_dispatcher(dispacher);
+    let result = NewCustomDispatcherResponse {
+        rid,
+    };
+    let result_json = serde_json::to_string(&result).unwrap();
+    Op::Sync(result_json.as_bytes().into())
 }
 
-declare_plugin_op!(new_test_dispatcher, op_new_test_dispatcher);
+declare_plugin_op!(new_custom_dispatcher, op_new_custom_dispatcher);

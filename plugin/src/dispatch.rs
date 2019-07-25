@@ -51,6 +51,29 @@ pub fn get_dispatcher(dispatcher_rid: ResourceId) -> Arc<Box<dyn Dispatcher>> {
     dispatcher_ref.clone()
 }
 
+pub type InsertDispatcherAccessor = fn(Arc<Box<dyn Dispatcher>>) -> ResourceId;
+pub type GetDispatcherAccessor = fn(ResourceId) -> Arc<Box<dyn Dispatcher>>;
+
+#[derive(Serialize)]
+struct GetDispatcherAccessorPtrResponse {
+    pub get_dispatcher_ptr: usize,
+    pub insert_dispatcher_ptr: usize,
+}
+
+pub fn op_get_dispatcher_accessor_ptrs(
+    data: &[u8],
+    zero_copy: Option<PinnedBuf>,
+) -> CoreOp {
+    wrap_op(|_data, _zero_copy| {
+        let get_dispatcher_ptr: usize = &(get_dispatcher as GetDispatcherAccessor) as *const GetDispatcherAccessor as usize;
+        let insert_dispatcher_ptr: usize = &(insert_dispatcher as InsertDispatcherAccessor) as *const InsertDispatcherAccessor as usize;
+        serialize_sync_result(GetDispatcherAccessorPtrResponse {
+            get_dispatcher_ptr,
+            insert_dispatcher_ptr,
+        })
+    }, data, zero_copy)
+}
+
 type StdDispatchReq = (u32, Vec<u8>, Option<Vec<u8>>);
 type StdDispatchReqQueue = VecDeque<StdDispatchReq>;
 

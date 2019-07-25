@@ -16,11 +16,12 @@ mod msg;
 mod tokio_util;
 mod util;
 
-pub use dispatch::insert_dispatcher;
-pub use dispatch::get_dispatcher;
+pub use dispatch::GetDispatcherAccessor;
+pub use dispatch::InsertDispatcherAccessor;
 pub use dispatch::Dispatcher;
 
 // Dispatch ops
+declare_plugin_op!(get_dispatcher_accessor_ptrs, dispatch::op_get_dispatcher_accessor_ptrs);
 declare_plugin_op!(new_std_dispatcher, dispatch::op_new_std_dispatcher);
 declare_plugin_op!(std_dispatcher_wait_for_dispatch, dispatch::op_std_dispatcher_wait_for_dispatch);
 declare_plugin_op!(std_dispatcher_respond, dispatch::op_std_dispatcher_respond);

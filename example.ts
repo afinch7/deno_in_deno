@@ -1,4 +1,5 @@
-import { Isolate, StdDispatcher, ModuleStore, StdLoader } from "./plugin/mod.ts";
+import { Isolate, StdDispatcher, ModuleStore, StdLoader, getDispatcherAccessors } from "./plugin/mod.ts";
+import { CustomDispatcher } from "./test_dispatcher/mod.ts";
 
 const textEncoder = new TextEncoder();
 
@@ -11,18 +12,15 @@ const source = `
 const data = new Uint8Array([116, 101, 115, 116]);
 
 async function main() {
-    while(true) {
-       const response = Deno.core.dispatch(data);
-       Deno.core.print(\`GUEST RUNTIME RECIEVED RESPONSE \${response} \n\`);
-    }
+    const response = Deno.core.dispatch(data);
+    Deno.core.print(\`GUEST RUNTIME RECIEVED RESPONSE \${response} \n\`);
 }
 
 main();
 `;
 
+/*
 const dispatcher = new StdDispatcher();
-
-isolate.setDispatcher(dispatcher);
 
 dispatcher.ondispatch = (data: Uint8Array, zero_copy?: Uint8Array): Uint8Array => {
     console.log(`HOST RUNTIME RECIEVED DISPATCH ${textDecoder.decode(data)}`);
@@ -30,6 +28,11 @@ dispatcher.ondispatch = (data: Uint8Array, zero_copy?: Uint8Array): Uint8Array =
     console.log(`HOST RUNTIME SENDING RESPONSE ${response}`);
     return response;
 };
+*/
+
+const dispatcher = new CustomDispatcher();
+
+isolate.setDispatcher(dispatcher);
 
 const moduleStore = new ModuleStore();
 
@@ -54,6 +57,9 @@ async function main() {
         loader,
         moduleStore,
     );
+    Deno.exit()
 }
 
 main();
+
+console.log(getDispatcherAccessors());

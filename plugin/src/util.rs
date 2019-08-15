@@ -1,32 +1,42 @@
-use crate::errors::DIDError;
+use crate::errors::DIDResult;
 use crate::msg::DIDResponse;
 use crate::msg::EmptyResponse;
+use deno::Op;
 use deno::Buf;
 use deno::CoreOp;
-use deno::Op;
-use deno::OpResult;
 use deno::PinnedBuf;
-use serde::Serialize;
 use futures::future::Future;
+use futures::future::FutureExt;
+use serde::Serialize;
+use std::pin::Pin;
 
-pub type DIDOpResult = OpResult<DIDError>;
+pub type DIDOpAsyncFuture = Pin<Box<dyn Future<Output = DIDResult<Buf>> + Send>>;
+pub enum DIDOp {
+    Sync(Buf),
+    Async(DIDOpAsyncFuture),
+}
+
+pub type DIDOpResult = DIDResult<DIDOp>;
 
 pub type DIDOpFn = fn(&[u8], Option<PinnedBuf>) -> DIDOpResult;
 
 pub fn wrap_op(op: DIDOpFn, data: &[u8], zero_copy: Option<PinnedBuf>) -> CoreOp {
     match op(data, zero_copy) {
-        Ok(Op::Sync(buf)) => Op::Sync(buf),
-        Ok(Op::Async(fut)) => {
-            let result_fut = Box::new(
-                fut.or_else(move |err: DIDError| -> Result<Buf, ()> {
-                    let result = DIDResponse::<EmptyResponse> {
-                        error: Some(err),
-                        data: None,
-                    };
-                    let result_json = serde_json::to_string(&result).unwrap();
-                    Ok(result_json.as_bytes().into())
-                })
-            );
+        Ok(DIDOp::Sync(buf)) => Op::Sync(buf),
+        Ok(DIDOp::Async(fut)) => {
+            let result_fut = async {
+                match fut.await {
+                    Ok(v) => v,
+                    Err(err) => {
+                        let result = DIDResponse::<EmptyResponse> {
+                            error: Some(err),
+                            data: None,
+                        };
+                        let result_json = serde_json::to_string(&result).unwrap();
+                        result_json.as_bytes().into()
+                    },
+                }
+            }.boxed();
             Op::Async(result_fut)
         },
         Err(err) => {
@@ -49,6 +59,6 @@ pub fn serialize_response<D: Serialize>(data: D) -> Buf {
     result_json.as_bytes().into()
 }
 
-pub fn serialize_and_wrap<D: Serialize>(data: D) -> DIDOpResult {
-    Ok(Op::Sync(serialize_response(data)))
+pub fn serialize_sync_result<D: Serialize>(data: D) -> DIDOpResult {
+    Ok(DIDOp::Sync(serialize_response(data)))
 }

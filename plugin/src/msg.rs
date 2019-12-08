@@ -1,11 +1,4 @@
-use crate::errors::DIDError;
-use serde::{Serialize};
-
-#[derive(Serialize)]
-pub struct DIDResponse<D: Serialize> {
-    pub error: Option<DIDError>,
-    pub data: Option<D>,
-}
+use serde::Serialize;
 
 pub type ResourceId = u32;
 
@@ -13,6 +6,3 @@ pub type ResourceId = u32;
 pub struct ResourceIdResponse {
     pub rid: ResourceId,
 }
-
-#[derive(Serialize)]
-pub struct EmptyResponse;

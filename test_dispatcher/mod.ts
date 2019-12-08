@@ -1,11 +1,9 @@
-import { getDispatcherAccessors, Dispatcher } from "../plugin/mod.ts";
+// import { build } from "../../deno_std/cargo/mod.ts";
+import { join, pluginFilename, DispatchJsonPluginOp, getDispatcherAccessors, Dispatcher } from "./deps.ts";
 
-import { build } from "../../deno_std/cargo/mod.ts";
-import { join, dirname } from "https://deno.land/std/fs/path/mod.ts";
+const { openPlugin } = Deno;
 
-const { openPlugin, pluginFilename } = Deno;
-
-const manifest_path = join(dirname(import.meta.url), "Cargo.toml");
+// const manifest_path = join(dirname(import.meta.url), "Cargo.toml");
 
 /*
 const buildResult = build({
@@ -32,7 +30,7 @@ const plugin = openPlugin(
   )
 );
 
-const newCustomDispatcher = plugin.loadOp("new_custom_dispatcher");
+const newCustomDispatcher = new DispatchJsonPluginOp(plugin.ops.newCustomDispatcher);
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
@@ -50,25 +48,15 @@ export function wrapSyncOp(response: OpResponseAnySync): Uint8Array {
 
 export class CustomDispatcher implements Dispatcher {
 
-    private readonly rid_: number;
+  private readonly rid_: number;
 
-    constructor() {
-        const response = JSON.parse(
-            textDecoder.decode(
-                wrapSyncOp(
-                    newCustomDispatcher.dispatch(
-                        textEncoder.encode(
-                            JSON.stringify(getDispatcherAccessors())
-                        )
-                    ),
-                ),
-            ),
-        );
-        this.rid_ = response.rid;
-    }
+  constructor() {
+    const response = newCustomDispatcher.dispatchSync(getDispatcherAccessors());
+    this.rid_ = response.rid;
+  }
 
-    get rid(): number {
-        return this.rid_;
-    }
+  get rid(): number {
+    return this.rid_;
+  }
 
 }

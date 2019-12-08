@@ -2,4 +2,5 @@
 members = [
   "plugin",
   "test_dispatcher",
+  "std/plugins/dispatch_json"
 ]

@@ -1,36 +1,32 @@
-use crate::errors::DIDResult;
-use crate::msg::EmptyResponse;
 use crate::msg::ResourceId;
-use crate::util::DIDOp;
-use crate::util::wrap_op;
-use crate::util::serialize_response;
-use crate::util::serialize_sync_result;
-use deno::PinnedBuf;
-use deno::CoreOp;
-use deno::Op;
-use deno::Buf;
+use deno_core::*;
+use deno_dispatch_json::JsonOp;
 use futures::channel::oneshot;
 use futures::future::FutureExt;
 use futures::task::AtomicWaker;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_json::json;
+use serde_json::Value;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::future::Future;
-use std::task::Context;
-use std::task::Poll;
+use std::pin::Pin;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
-use std::sync::RwLock;
-use std::sync::Mutex;
 use std::sync::Arc;
-use std::pin::Pin;
+use std::sync::Mutex;
+use std::sync::RwLock;
+use std::task::Context;
+use std::task::Poll;
 
 lazy_static! {
     static ref NEXT_DISPATCHER_ID: AtomicU32 = AtomicU32::new(1);
-    static ref DISPATCHER_MAP: RwLock<HashMap<u32, Arc<Box<dyn Dispatcher>>>> = RwLock::new(HashMap::new());
+    static ref DISPATCHER_MAP: RwLock<HashMap<u32, Arc<Box<dyn Dispatcher>>>> =
+        RwLock::new(HashMap::new());
     static ref NEXT_STD_DISPATCHER_ID: AtomicU32 = AtomicU32::new(1);
-    static ref STD_DISPATCHER_MAP: RwLock<HashMap<u32, Arc<StdDispatcher>>> = RwLock::new(HashMap::new());
+    static ref STD_DISPATCHER_MAP: RwLock<HashMap<u32, Arc<StdDispatcher>>> =
+        RwLock::new(HashMap::new());
 }
 
 // TODO(afinch7) maybe move this to another package/crate
@@ -61,17 +57,17 @@ struct GetDispatcherAccessorPtrResponse {
 }
 
 pub fn op_get_dispatcher_accessor_ptrs(
-    data: &[u8],
-    zero_copy: Option<PinnedBuf>,
-) -> CoreOp {
-    wrap_op(|_data, _zero_copy| {
-        let get_dispatcher_ptr: usize = &(get_dispatcher as GetDispatcherAccessor) as *const GetDispatcherAccessor as usize;
-        let insert_dispatcher_ptr: usize = &(insert_dispatcher as InsertDispatcherAccessor) as *const InsertDispatcherAccessor as usize;
-        serialize_sync_result(GetDispatcherAccessorPtrResponse {
-            get_dispatcher_ptr,
-            insert_dispatcher_ptr,
-        })
-    }, data, zero_copy)
+    _args: Value,
+    _zero_copy: Option<PinnedBuf>,
+) -> Result<JsonOp, ErrBox> {
+    let get_dispatcher_ptr: usize =
+        &(get_dispatcher as GetDispatcherAccessor) as *const GetDispatcherAccessor as usize;
+    let insert_dispatcher_ptr: usize = &(insert_dispatcher as InsertDispatcherAccessor)
+        as *const InsertDispatcherAccessor as usize;
+    Ok(JsonOp::Sync(json!(GetDispatcherAccessorPtrResponse {
+        get_dispatcher_ptr,
+        insert_dispatcher_ptr,
+    })))
 }
 
 type StdDispatchReq = (u32, Vec<u8>, Option<Vec<u8>>);
@@ -98,7 +94,7 @@ impl StdDispatcher {
 impl Dispatcher for StdDispatcher {
     fn dispatch(&self, data: &[u8], zero_copy: Option<PinnedBuf>) -> CoreOp {
         let cmd_id = self.next_cmd_id.fetch_add(1, Ordering::SeqCst);
-        let (res_sender, res_reciever) = oneshot::channel::<CoreOp>();
+        let (res_sender, mut res_reciever) = oneshot::channel::<CoreOp>();
         {
             let mut lock = self.res_senders.write().unwrap();
             lock.insert(cmd_id, res_sender);
@@ -106,7 +102,14 @@ impl Dispatcher for StdDispatcher {
             queue.push_back((cmd_id, data.to_vec(), zero_copy.map(|v| v.to_vec())));
         }
         self.waker.wake();
-        futures::executor::block_on(res_reciever).unwrap()
+        // TODO(afinch7) This is a realy ugly hack. Find a better solution here.
+        let mut cx = futures::task::Context::from_waker(futures::task::noop_waker_ref());
+        loop {
+            match res_reciever.poll_unpin(&mut cx) {
+                Poll::Ready(v) => return v.unwrap(),
+                Poll::Pending => {}
+            };
+        }
     }
 }
 
@@ -123,21 +126,19 @@ struct NewStdDispatcherResponse {
 }
 
 pub fn op_new_std_dispatcher(
-    data: &[u8],
-    zero_copy: Option<PinnedBuf>,
-) -> CoreOp {
-    wrap_op(|_data, _zero_copy| {
-        let std_rid = NEXT_STD_DISPATCHER_ID.fetch_add(1, Ordering::SeqCst);
-        let dispatcher = Arc::new(StdDispatcher::new());
-        let mut lock = STD_DISPATCHER_MAP.write().unwrap();
-        lock.insert(std_rid, dispatcher.clone());
-        let rid = insert_dispatcher(Arc::new(Box::new(dispatcher) as Box<dyn Dispatcher>));
-        
-        serialize_sync_result(NewStdDispatcherResponse {
-            std_dispatcher_rid: std_rid,
-            dispatcher_rid: rid,
-        })
-    }, data, zero_copy)
+    _args: Value,
+    _zero_copy: Option<PinnedBuf>,
+) -> Result<JsonOp, ErrBox> {
+    let std_rid = NEXT_STD_DISPATCHER_ID.fetch_add(1, Ordering::SeqCst);
+    let dispatcher = Arc::new(StdDispatcher::new());
+    let mut lock = STD_DISPATCHER_MAP.write().unwrap();
+    lock.insert(std_rid, dispatcher.clone());
+    let rid = insert_dispatcher(Arc::new(Box::new(dispatcher) as Box<dyn Dispatcher>));
+
+    Ok(JsonOp::Sync(json!(NewStdDispatcherResponse {
+        std_dispatcher_rid: std_rid,
+        dispatcher_rid: rid,
+    })))
 }
 
 #[derive(Deserialize)]
@@ -160,7 +161,7 @@ struct RecvWorker {
 }
 
 impl Future for RecvWorker {
-    type Output = DIDResult<Buf>;
+    type Output = Result<Value, ErrBox>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         let lock = STD_DISPATCHER_MAP.read().unwrap();
@@ -168,7 +169,7 @@ impl Future for RecvWorker {
         dispatcher.waker.register(cx.waker());
         let mut queue = dispatcher.req_queue.lock().unwrap();
         let result = match queue.pop_front() {
-            Some(req) => Poll::Ready(Ok(serialize_response(StdDispatcherWaitForDispatchResponse {
+            Some(req) => Poll::Ready(Ok(json!(StdDispatcherWaitForDispatchResponse {
                 cmd_id: req.0,
                 data: req.1,
                 zero_copy: req.2,
@@ -180,19 +181,14 @@ impl Future for RecvWorker {
 }
 
 pub fn op_std_dispatcher_wait_for_dispatch(
-    data: &[u8],
-    zero_copy: Option<PinnedBuf>,
-) -> CoreOp {
-    wrap_op(|data, _zero_copy| {
-        let data_str = std::str::from_utf8(&data[..]).unwrap();
-        let options: StdDispatcherWaitForDispatchOptions = serde_json::from_str(data_str).unwrap();
-        
-        let op = RecvWorker {
-            rid: options.rid,
-        };
+    args: Value,
+    _zero_copy: Option<PinnedBuf>,
+) -> Result<JsonOp, ErrBox> {
+    let args: StdDispatcherWaitForDispatchOptions = serde_json::from_value(args)?;
 
-        Ok(DIDOp::Async(op.boxed()))
-    }, data, zero_copy)
+    let op = RecvWorker { rid: args.rid };
+
+    Ok(JsonOp::Async(op.boxed()))
 }
 
 #[derive(Deserialize)]
@@ -202,25 +198,22 @@ struct StdDispatcherRespondOptions {
 }
 
 pub fn op_std_dispatcher_respond(
-    data: &[u8],
+    args: Value,
     zero_copy: Option<PinnedBuf>,
-) -> CoreOp {
-    wrap_op(|data, zero_copy| {
-        let data_str = std::str::from_utf8(&data[..]).unwrap();
-        let options: StdDispatcherRespondOptions = serde_json::from_str(data_str).unwrap();
-        let lock = STD_DISPATCHER_MAP.read().unwrap();
-        let dispatcher = lock.get(&options.rid).unwrap();
-        let mut senders_lock = dispatcher.res_senders.write().unwrap();
-        let sender = senders_lock.remove(&options.cmd_id).unwrap();
-        match zero_copy {
-            Some(buf) => {
-                assert!(sender.send(Op::Sync(buf[..].into())).is_ok());
-                serialize_sync_result(EmptyResponse)
-            },
-            None => {
-                panic!("Promise returns not implemented yet!");
-                // TODO(afinch7) implement promise returns.
-            }
+) -> Result<JsonOp, ErrBox> {
+    let args: StdDispatcherRespondOptions = serde_json::from_value(args)?;
+    let lock = STD_DISPATCHER_MAP.read().unwrap();
+    let dispatcher = lock.get(&args.rid).unwrap();
+    let mut senders_lock = dispatcher.res_senders.write().unwrap();
+    let sender = senders_lock.remove(&args.cmd_id).unwrap();
+    match zero_copy {
+        Some(buf) => {
+            assert!(sender.send(Op::Sync(buf[..].into())).is_ok());
+            Ok(JsonOp::Sync(json!({})))
         }
-    }, data, zero_copy)
+        None => {
+            panic!("Promise returns not implemented yet!");
+            // TODO(afinch7) implement promise returns.
+        }
+    }
 }

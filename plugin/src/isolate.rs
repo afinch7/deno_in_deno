@@ -1,100 +1,81 @@
 use crate::dispatch::get_dispatcher;
-use crate::errors::new_error;
-use crate::errors::DIDResult;
-use crate::util::wrap_op;
-use crate::util::serialize_sync_result;
-use crate::util::serialize_response;
-use crate::util::DIDOp;
+use crate::modules::get_loader;
 use crate::msg::ResourceId;
 use crate::msg::ResourceIdResponse;
-use crate::msg::EmptyResponse;
-use deno::CoreOp;
-use deno::Buf;
-use deno::PinnedBuf;
-use deno::Isolate;
-use deno::StartupData;
-use deno::RecursiveLoad;
-use futures::future::TryFutureExt;
+use deno_core::*;
+use deno_dispatch_json::JsonOp;
 use futures::future::FutureExt;
-use futures::task::Poll;
+use futures::future::TryFutureExt;
+use futures::task::AtomicWaker;
 use futures::task::Context;
-use futures::channel::oneshot::channel;
+use futures::task::Poll;
+use futures::task::SpawnExt;
 use serde::Deserialize;
+use serde_json::json;
+use serde_json::Value;
 use std::collections::HashMap;
-use std::cell::RefCell;
 use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
-use std::sync::Mutex;
-use std::sync::RwLock;
 use std::sync::Arc;
-use std::pin::Pin;
+use std::sync::RwLock;
+use tokio::sync::Mutex;
 
 lazy_static! {
     static ref NEXT_STARTUP_DATA_ID: AtomicU32 = AtomicU32::new(1);
-    static ref STARTUP_DATA_MAP: Mutex<HashMap<u32, RefCell<Vec<u8>>>> = Mutex::new(HashMap::new());
+    static ref STARTUP_DATA_MAP: Mutex<HashMap<u32, Arc<Vec<u8>>>> = Mutex::new(HashMap::new());
     static ref NEXT_ISOLATE_ID: AtomicU32 = AtomicU32::new(1);
-    static ref ISOLATE_MAP: RwLock<HashMap<u32, Arc<Mutex<Isolate>>>> = RwLock::new(HashMap::new());
+    static ref ISOLATE_MAP: RwLock<HashMap<u32, Arc<Mutex<Box<EsIsolate>>>>> =
+        RwLock::new(HashMap::new());
 }
 
-pub fn op_new_startup_data(
-    data: &[u8],
-    zero_copy: Option<PinnedBuf>,
-) -> CoreOp {
-    wrap_op(|_data, zero_copy| {
-        assert!(zero_copy.is_some());
-        let startup_data = zero_copy.unwrap().to_vec();
-        let startup_data_id = NEXT_STARTUP_DATA_ID.fetch_add(1, Ordering::SeqCst);
-        let mut lock = STARTUP_DATA_MAP.lock().unwrap();
-        lock.insert(startup_data_id, RefCell::new(startup_data));
-        serialize_sync_result(ResourceIdResponse {
-            rid: startup_data_id,
-        })
-    }, data, zero_copy)
-} 
+pub fn op_new_startup_data(_args: Value, zero_copy: Option<PinnedBuf>) -> Result<JsonOp, ErrBox> {
+    assert!(zero_copy.is_some());
+    let startup_data = zero_copy.unwrap().to_vec();
+    let startup_data_id = NEXT_STARTUP_DATA_ID.fetch_add(1, Ordering::SeqCst);
+    let mut lock = STARTUP_DATA_MAP.try_lock().unwrap();
+    lock.insert(startup_data_id, Arc::new(startup_data));
+    Ok(JsonOp::Sync(json!(ResourceIdResponse {
+        rid: startup_data_id,
+    })))
+}
 
 #[derive(Deserialize)]
 struct NewIsolateOptions {
     pub will_snapshot: bool,
     pub startup_data_rid: Option<u32>,
+    pub loader_rid: u32,
 }
 
-pub fn op_new_isolate(
-    data: &[u8],
-    zero_copy: Option<PinnedBuf>,
-) -> CoreOp {
-    wrap_op(|data, _zero_copy| {
-        let data_str = std::str::from_utf8(&data[..]).unwrap();
-        let options: NewIsolateOptions = serde_json::from_str(data_str).unwrap();
-        
-        match options.startup_data_rid {
-            Some(rid) => {
-                let lock = STARTUP_DATA_MAP.lock().unwrap();
-                let cell = lock.get(&rid).unwrap().borrow();
-                let startup_data = StartupData::Snapshot(&cell);
-                let isolate_rid = op_new_isolate_inner(startup_data, options.will_snapshot);
-                serialize_sync_result(ResourceIdResponse {
-                    rid: isolate_rid,
-                })
-            },
-            None => {
-                let isolate_rid = op_new_isolate_inner(StartupData::None, options.will_snapshot);
-                serialize_sync_result(ResourceIdResponse {
-                    rid: isolate_rid,
-                })
-            },
+pub fn op_new_isolate(args: Value, _zero_copy: Option<PinnedBuf>) -> Result<JsonOp, ErrBox> {
+    let args: NewIsolateOptions = serde_json::from_value(args)?;
+
+    let rid = match args.startup_data_rid {
+        Some(_rid) => {
+            // TODO(afinch7) make this work.
+            let isolate_rid =
+                op_new_isolate_inner(args.loader_rid, StartupData::None, args.will_snapshot);
+            isolate_rid
         }
-        // TODO(afinch7) figure out some way to handle startup data.
-        
-    }, data, zero_copy)
+        None => {
+            let isolate_rid =
+                op_new_isolate_inner(args.loader_rid, StartupData::None, args.will_snapshot);
+            isolate_rid
+        }
+    };
+    Ok(JsonOp::Sync(json!(ResourceIdResponse { rid })))
+    // TODO(afinch7) figure out some way to handle startup data.
 }
 
 fn op_new_isolate_inner(
+    loader_rid: u32,
     startup_data: StartupData,
     will_snapshot: bool,
 ) -> ResourceId {
     let isolate_rid = NEXT_ISOLATE_ID.fetch_add(1, Ordering::SeqCst);
-    let isolate = Isolate::new(startup_data, will_snapshot);
+    let loader = get_loader(loader_rid);
+    let isolate = EsIsolate::new(loader, startup_data, will_snapshot);
     let mut lock = ISOLATE_MAP.write().unwrap();
     lock.insert(isolate_rid, Arc::new(Mutex::new(isolate)));
     isolate_rid
@@ -106,61 +87,63 @@ struct IsolateIsCompleteOptions {
 }
 
 struct IsolateWorker {
-    pub rid: u32,
+    pub isolate: Arc<Mutex<Box<EsIsolate>>>,
 }
 
 impl Future for IsolateWorker {
-    type Output = DIDResult<Buf>;
+    type Output = Result<(), ErrBox>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        let lock = ISOLATE_MAP.read().unwrap();
-        let i = lock.get(&self.rid).unwrap();
-        let mut isolate = i.lock().unwrap();
-        match isolate.poll_unpin(cx) {
-            Poll::Ready(_) => Poll::Ready(Ok(serialize_response(EmptyResponse))),
-            Poll::Pending => Poll::Pending,
+        let inner = self.get_mut();
+        let waker = AtomicWaker::new();
+        waker.register(cx.waker());
+        match inner.isolate.try_lock() {
+            Ok(mut isolate) => isolate.poll_unpin(cx),
+            Err(_) => {
+                waker.wake();
+                Poll::Pending
+            }
         }
     }
 }
 
 pub fn op_isolate_is_complete(
-    data: &[u8],
-    zero_copy: Option<PinnedBuf>,
-) -> CoreOp {
-    wrap_op(|data, _zero_copy| {
-        let data_str = std::str::from_utf8(&data[..]).unwrap();
-        let options: IsolateIsCompleteOptions = serde_json::from_str(data_str).unwrap();
+    args: Value,
+    _zero_copy: Option<PinnedBuf>,
+) -> Result<JsonOp, ErrBox> {
+    let args: IsolateIsCompleteOptions = serde_json::from_value(args)?;
 
-        let op = IsolateWorker {
-            rid: options.rid,
-        };
-        Ok(DIDOp::Async(op.boxed()))
-    }, data, zero_copy)
+    let lock = ISOLATE_MAP.read().unwrap();
+    let isolate = lock.get(&args.rid).unwrap().clone();
+    drop(lock);
+
+    let fut = IsolateWorker { isolate }.map_ok(|_| json!({}));
+
+    Ok(JsonOp::Async(fut.boxed()))
 }
 
 #[derive(Deserialize)]
-struct IsolateSetDispatcherOptions {
+#[serde(rename_all = "camelCase")]
+struct IsolateRegisterOpOptions {
     pub rid: u32,
     pub dispatcher_rid: u32,
+    pub name: String,
 }
 
-pub fn op_isolate_set_dispatcher(
-    data: &[u8],
-    zero_copy: Option<PinnedBuf>,
-) -> CoreOp {
-    wrap_op(|data, _zero_copy| {
-        let data_str = std::str::from_utf8(&data[..]).unwrap();
-        let options: IsolateSetDispatcherOptions = serde_json::from_str(data_str).unwrap();
+pub fn op_isolate_register_op(
+    args: Value,
+    _zero_copy: Option<PinnedBuf>,
+) -> Result<JsonOp, ErrBox> {
+    let args: IsolateRegisterOpOptions = serde_json::from_value(args)?;
 
-        let lock = ISOLATE_MAP.read().unwrap();
-        let isolate = lock.get(&options.rid).unwrap();
-        let dispatcher = get_dispatcher(options.dispatcher_rid);
-        let mut isolate_lock = isolate.lock().unwrap();
-        isolate_lock.set_dispatch(move |data, zero_copy| {
-            dispatcher.dispatch(data, zero_copy)
-        });
-        serialize_sync_result(EmptyResponse)
-    }, data, zero_copy)
+    let lock = ISOLATE_MAP.read().unwrap();
+    let isolate = lock.get(&args.rid).unwrap();
+    let dispatcher = get_dispatcher(args.dispatcher_rid);
+    let isolate_lock = isolate.try_lock().unwrap();
+    let op_id = isolate_lock.register_op(&args.name, move |data, zero_copy| {
+        dispatcher.dispatch(data, zero_copy)
+    });
+    Ok(JsonOp::Sync(json!({ "opId": op_id })))
 }
 
 #[derive(Deserialize)]
@@ -170,78 +153,51 @@ struct IsolateExecuteOptions {
     pub source: String,
 }
 
-pub fn op_isolate_execute(
-    data: &[u8],
-    zero_copy: Option<PinnedBuf>,
-) -> CoreOp {
-    wrap_op(|data, _zero_copy| {
-        let data_str = std::str::from_utf8(&data[..]).unwrap();
-        let options: IsolateExecuteOptions = serde_json::from_str(data_str).unwrap();
+pub fn op_isolate_execute(args: Value, _zero_copy: Option<PinnedBuf>) -> Result<JsonOp, ErrBox> {
+    let args: IsolateExecuteOptions = serde_json::from_value(args)?;
 
-        let (sender, receiver) = channel::<DIDResult<Buf>>();
-        std::thread::spawn(move || {
-            let lock = ISOLATE_MAP.read().unwrap();
-            let isolate = lock.get(&options.rid).unwrap();
-            let mut isolate_lock = isolate.lock().unwrap();
-            let result = match isolate_lock.execute(&options.filename, &options.source) {
-                Ok(_) => Ok(serialize_response(EmptyResponse)),
-                Err(err) => Err(new_error(&format!("{:#?}", err))),
-            };
-            assert!(sender.send(result).is_ok());
-        });
+    let lock = ISOLATE_MAP.read().unwrap();
+    let isolate = lock.get(&args.rid).unwrap().clone();
+    drop(lock);
 
-        Ok(DIDOp::Async(receiver.map(|result| match result {
-            Ok(v) => v,
-            Err(err) => Err(new_error(&format!("{:#?}", err))),
-        }).boxed()))
-    }, data, zero_copy)
+    let fut = async move {
+        let mut isolate_lock = isolate.lock().await;
+        isolate_lock.execute(&args.filename, &args.source)
+    }
+    .map_ok(|_| json!({}))
+    .boxed();
+    let pool = futures::executor::ThreadPool::new().unwrap();
+    let fut_handle = pool.spawn_with_handle(fut).unwrap();
+
+    Ok(JsonOp::Async(fut_handle.boxed()))
 }
 
 #[derive(Deserialize)]
 struct IsolateExecuteModuleOptions {
     pub rid: u32,
-    pub loader_rid: u32,
-    pub module_store_rid: u32,
     pub module_specifier: String,
 }
 
 pub fn op_isolate_execute_module(
-    data: &[u8],
-    zero_copy: Option<PinnedBuf>,
-) -> CoreOp {
-    wrap_op(|data, _zero_copy| {
-        let data_str = std::str::from_utf8(&data[..]).unwrap();
-        let options: IsolateExecuteModuleOptions = serde_json::from_str(data_str).unwrap();
+    args: Value,
+    _zero_copy: Option<PinnedBuf>,
+) -> Result<JsonOp, ErrBox> {
+    let args: IsolateExecuteModuleOptions = serde_json::from_value(args)?;
 
-        let (sender, receiver) = channel::<DIDResult<Buf>>();
-        std::thread::spawn(move || {
-            let recursive_load = {
-                let lock = ISOLATE_MAP.read().unwrap();
-                let isolate = lock.get(&options.rid).unwrap();
-                let loader = crate::modules::get_loader(options.loader_rid);
-                let modules_store = crate::modules::get_module_store(options.module_store_rid);
-                RecursiveLoad::new(
-                    &options.module_specifier,
-                    loader,
-                    Arc::clone(isolate),
-                    modules_store,
-                )
-            };
-            let op = recursive_load.and_then(move |id| {
-                let lock = ISOLATE_MAP.read().unwrap();
-                let isolate = lock.get(&options.rid).unwrap();
-                let mut isolate = isolate.lock().unwrap();
-                futures::future::ready(match isolate.mod_evaluate(id) {
-                    Ok(_) => Ok(serialize_response(EmptyResponse)),
-                    Err(err) => Err(err),
-                })
-            }).map_err(|e| new_error(&format!("{:#?}", e))).boxed();
-            assert!(sender.send(crate::tokio_util::block_on(op)).is_ok());
-        });
+    let lock = ISOLATE_MAP.read().unwrap();
+    let isolate = lock.get(&args.rid).unwrap().clone();
+    drop(lock);
 
-        Ok(DIDOp::Async(receiver.map(|result| match result {
-            Ok(v) => v,
-            Err(err) => Err(new_error(&format!("{:#?}", err))),
-        }).boxed()))
-    }, data, zero_copy)
+    let fut = async move {
+        let mut i = isolate.try_lock().unwrap();
+        let id = i.load_module(&args.module_specifier, None).await?;
+        let result = i.mod_evaluate(id);
+        result
+    }
+    .map_ok(|_| json!({}))
+    .boxed();
+    let pool = futures::executor::ThreadPool::new().unwrap();
+    let fut_handle = pool.spawn_with_handle(fut).unwrap();
+
+    Ok(JsonOp::Async(fut_handle.boxed()))
 }

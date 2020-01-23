@@ -1,9 +1,8 @@
-import { build } from "../../deno_std/cargo/mod.ts";
-import { join, dirname } from "https://deno.land/std/fs/path/mod.ts";
+import { join, pluginFilename, DispatchJsonPluginOp } from "./deps.ts";
 
-const { openPlugin, pluginFilename } = Deno;
+const { openPlugin } = Deno;
 
-const manifest_path = join(dirname(import.meta.url), "Cargo.toml");
+// const manifest_path = join(dirname(import.meta.url), "Cargo.toml");
 
 /*
 const buildResult = build({
@@ -31,23 +30,22 @@ const plugin = openPlugin(
 );
 
 // StandardDispatcher ops
-export const getDispatcherAccessorPtrs = plugin.loadOp("get_dispatcher_accessor_ptrs");
-export const newStdDispatcher = plugin.loadOp("new_std_dispatcher");
-export const stdDispatcherWaitForDispatch = plugin.loadOp("std_dispatcher_wait_for_dispatch");
-export const stdDispatcherRespond = plugin.loadOp("std_dispatcher_respond");
+export const getDispatcherAccessorPtrs = new DispatchJsonPluginOp(plugin.ops.getDispatcherAccessorPtrs);
+export const newStdDispatcher = new DispatchJsonPluginOp(plugin.ops.newStdDispatcher);
+export const stdDispatcherWaitForDispatch = new DispatchJsonPluginOp(plugin.ops.stdDispatcherWaitForDispatch);
+export const stdDispatcherRespond = new DispatchJsonPluginOp(plugin.ops.stdDispatcherRespond);
 
 // Isolate ops
-export const newStartupData = plugin.loadOp("new_startup_data");
-export const newIsolate = plugin.loadOp("new_isolate");
-export const isolateIsComplete = plugin.loadOp("isolate_is_complete");
-export const isolateSetDispatcher = plugin.loadOp("isolate_set_dispatcher");
-export const isolateExecute = plugin.loadOp("isolate_execute");
-export const isolateExecuteModule = plugin.loadOp("isolate_execute_module");
+export const newStartupData = new DispatchJsonPluginOp(plugin.ops.newStartupData);
+export const newIsolate = new DispatchJsonPluginOp(plugin.ops.newIsolate);
+export const isolateIsComplete = new DispatchJsonPluginOp(plugin.ops.isolateIsComplete);
+export const isolateRegisterOp = new DispatchJsonPluginOp(plugin.ops.isolateRegisterOp);
+export const isolateExecute = new DispatchJsonPluginOp(plugin.ops.isolateExecute);
+export const isolateExecuteModule = new DispatchJsonPluginOp(plugin.ops.isolateExecuteModule);
 
 // Module ops
-export const newModuleStore = plugin.loadOp("new_module_store");
-export const newStdLoader = plugin.loadOp("new_std_loader");
-export const stdLoaderAwaitResolve = plugin.loadOp("std_loader_await_resolve");
-export const stdLoaderRespondResolve = plugin.loadOp("std_loader_respond_resolve");
-export const stdLoaderAwaitLoad = plugin.loadOp("std_loader_await_load");
-export const stdLoaderRespondLoad = plugin.loadOp("std_loader_respond_load");
+export const newStdLoader = new DispatchJsonPluginOp(plugin.ops.newStdLoader);
+export const stdLoaderAwaitResolve = new DispatchJsonPluginOp(plugin.ops.stdLoaderAwaitResolve);
+export const stdLoaderRespondResolve = new DispatchJsonPluginOp(plugin.ops.stdLoaderRespondResolve);
+export const stdLoaderAwaitLoad = new DispatchJsonPluginOp(plugin.ops.stdLoaderAwaitLoad);
+export const stdLoaderRespondLoad = new DispatchJsonPluginOp(plugin.ops.stdLoaderRespondLoad);

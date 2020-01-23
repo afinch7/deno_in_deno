@@ -1,5 +1,4 @@
 import { getDispatcherAccessorPtrs, newStdDispatcher, stdDispatcherWaitForDispatch, stdDispatcherRespond } from "./ops.ts";
-import { encodeMessage, wrapSyncOpDecode, wrapAsyncOpDecode, ResourceIdResponse } from "./util.ts";
 
 export interface Dispatcher {
     rid: number;
@@ -16,11 +15,7 @@ interface GetDispatcherAccessorPtrsResponse {
 }
 
 export function getDispatcherAccessors(): DispatcherAccessorPtrs {
-    const response = wrapSyncOpDecode<GetDispatcherAccessorPtrsResponse>(
-        getDispatcherAccessorPtrs.dispatch(
-            encodeMessage(""),
-        ),
-    );
+    const response = getDispatcherAccessorPtrs.dispatchSync({});
     return {
         getDispatcher: response.get_dispatcher_ptr,
         insertDispatcher: response.insert_dispatcher_ptr,
@@ -45,9 +40,7 @@ export class StdDispatcher implements Dispatcher {
     public ondispatch?: (data: Uint8Array, zero_copy?: Uint8Array) => Uint8Array;
 
     constructor() {
-        const response = wrapSyncOpDecode<NewStandardDispatcherResponse>(
-            newStdDispatcher.dispatch(new Uint8Array(0)),
-        );
+        const response = newStdDispatcher.dispatchSync({});
         this.rid_ = response.dispatcher_rid;
         this.stdDispatcherRid = response.std_dispatcher_rid;
         this.run();
@@ -58,43 +51,25 @@ export class StdDispatcher implements Dispatcher {
     }
 
     async respond(cmd_id: number, response: Uint8Array) {
-        await wrapSyncOpDecode(
-            stdDispatcherRespond.dispatch(
-                encodeMessage(
-                    {
-                        rid: this.stdDispatcherRid,
-                        cmd_id: cmd_id,
-                    },
-                ),
-                response,
-            ),
-        );
+        stdDispatcherRespond.dispatchSync({
+            rid: this.stdDispatcherRid,
+            cmd_id: cmd_id,
+        });
     }
 
     private async run() {
         while(true) {
-            const request = await wrapAsyncOpDecode<StandardDispatcherWaitForDispatchResponse> (
-                stdDispatcherWaitForDispatch.dispatch(
-                    encodeMessage(
-                        {
-                            rid: this.stdDispatcherRid,
-                        },
-                    ),
-                ),
-            );
+            const request = await stdDispatcherWaitForDispatch.dispatchAsync({
+                rid: this.stdDispatcherRid,
+            });
             const data = new Uint8Array(request.data);
             const zero_copy = request.zero_copy ? new Uint8Array(request.zero_copy) : undefined;
             const response = this.ondispatch(data, zero_copy);
-            await wrapSyncOpDecode(
-                stdDispatcherRespond.dispatch(
-                    encodeMessage(
-                        {
-                            rid: this.stdDispatcherRid,
-                            cmd_id: request.cmd_id,
-                        },
-                    ),
-                    response,
-                ),
+            stdDispatcherRespond.dispatchSync({
+                    rid: this.stdDispatcherRid,
+                    cmd_id: request.cmd_id,
+                },
+                response,
             );
         }
     }

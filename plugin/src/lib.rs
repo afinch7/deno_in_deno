@@ -1,43 +1,81 @@
-#![feature(async_await, await_macro)]
-use deno::CoreOp;
-use deno::PinnedBuf;
+use deno_core::*;
+use deno_dispatch_json::json_op;
 
 #[macro_use]
 extern crate lazy_static;
 
-#[macro_use]
-extern crate deno;
-
 mod dispatch;
-mod errors;
 mod isolate;
 mod modules;
 mod msg;
-mod tokio_util;
-mod util;
 
+pub use dispatch::Dispatcher;
 pub use dispatch::GetDispatcherAccessor;
 pub use dispatch::InsertDispatcherAccessor;
-pub use dispatch::Dispatcher;
 
-// Dispatch ops
-declare_plugin_op!(get_dispatcher_accessor_ptrs, dispatch::op_get_dispatcher_accessor_ptrs);
-declare_plugin_op!(new_std_dispatcher, dispatch::op_new_std_dispatcher);
-declare_plugin_op!(std_dispatcher_wait_for_dispatch, dispatch::op_std_dispatcher_wait_for_dispatch);
-declare_plugin_op!(std_dispatcher_respond, dispatch::op_std_dispatcher_respond);
+pub fn init(cx: &mut dyn PluginInitContext) {
+    // Dispatch ops
+    cx.register_op(
+        "getDispatcherAccessorPtrs",
+        json_op(Box::new(dispatch::op_get_dispatcher_accessor_ptrs)),
+    );
+    cx.register_op(
+        "newStdDispatcher",
+        json_op(Box::new(dispatch::op_new_std_dispatcher)),
+    );
+    cx.register_op(
+        "stdDispatcherWaitForDispatch",
+        json_op(Box::new(dispatch::op_std_dispatcher_wait_for_dispatch)),
+    );
+    cx.register_op(
+        "stdDispatcherRespond",
+        json_op(Box::new(dispatch::op_std_dispatcher_respond)),
+    );
 
-// Isolate ops
-declare_plugin_op!(new_startup_data, isolate::op_new_startup_data);
-declare_plugin_op!(new_isolate, isolate::op_new_isolate);
-declare_plugin_op!(isolate_is_complete, isolate::op_isolate_is_complete);
-declare_plugin_op!(isolate_set_dispatcher, isolate::op_isolate_set_dispatcher);
-declare_plugin_op!(isolate_execute, isolate::op_isolate_execute);
-declare_plugin_op!(isolate_execute_module, isolate::op_isolate_execute_module);
+    // Isolate ops
+    cx.register_op(
+        "newStartupData",
+        json_op(Box::new(isolate::op_new_startup_data)),
+    );
+    cx.register_op("newIsolate", json_op(Box::new(isolate::op_new_isolate)));
+    cx.register_op(
+        "isolateIsComplete",
+        json_op(Box::new(isolate::op_isolate_is_complete)),
+    );
+    cx.register_op(
+        "isolateRegisterOp",
+        json_op(Box::new(isolate::op_isolate_register_op)),
+    );
+    cx.register_op(
+        "isolateExecute",
+        json_op(Box::new(isolate::op_isolate_execute)),
+    );
+    cx.register_op(
+        "isolateExecuteModule",
+        json_op(Box::new(isolate::op_isolate_execute_module)),
+    );
 
-// Module ops
-declare_plugin_op!(new_module_store, modules::op_new_module_store);
-declare_plugin_op!(new_std_loader, modules::op_new_std_loader);
-declare_plugin_op!(std_loader_await_resolve, modules::op_std_loader_await_resolve);
-declare_plugin_op!(std_loader_respond_resolve, modules::op_std_loader_respond_resolve);
-declare_plugin_op!(std_loader_await_load, modules::op_std_loader_await_load);
-declare_plugin_op!(std_loader_respond_load, modules::op_std_loader_respond_load);
+    // Module ops
+    cx.register_op(
+        "newStdLoader",
+        json_op(Box::new(modules::op_new_std_loader)),
+    );
+    cx.register_op(
+        "stdLoaderAwaitResolve",
+        json_op(Box::new(modules::op_std_loader_await_resolve)),
+    );
+    cx.register_op(
+        "stdLoaderRespondResolve",
+        json_op(Box::new(modules::op_std_loader_respond_resolve)),
+    );
+    cx.register_op(
+        "stdLoaderAwaitLoad",
+        json_op(Box::new(modules::op_std_loader_await_load)),
+    );
+    cx.register_op(
+        "stdLoaderRespondLoad",
+        json_op(Box::new(modules::op_std_loader_respond_load)),
+    );
+}
+
+init_fn!(init);

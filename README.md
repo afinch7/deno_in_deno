@@ -5,6 +5,6 @@ Getting the example running:
 
 1. `cargo build`
 
-2. `deno run example.ts`
+2. `deno -A example.ts`
 
 Make sure you have deno v0.30.0 or newer.

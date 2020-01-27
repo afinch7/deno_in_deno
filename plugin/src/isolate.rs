@@ -23,39 +23,26 @@ use std::sync::RwLock;
 use tokio::sync::Mutex;
 
 lazy_static! {
-    static ref NEXT_STARTUP_DATA_ID: AtomicU32 = AtomicU32::new(1);
-    static ref STARTUP_DATA_MAP: Mutex<HashMap<u32, Arc<Vec<u8>>>> = Mutex::new(HashMap::new());
     static ref NEXT_ISOLATE_ID: AtomicU32 = AtomicU32::new(1);
     static ref ISOLATE_MAP: RwLock<HashMap<u32, Arc<Mutex<Box<EsIsolate>>>>> =
         RwLock::new(HashMap::new());
 }
 
-pub fn op_new_startup_data(_args: Value, zero_copy: Option<PinnedBuf>) -> Result<JsonOp, ErrBox> {
-    assert!(zero_copy.is_some());
-    let startup_data = zero_copy.unwrap().to_vec();
-    let startup_data_id = NEXT_STARTUP_DATA_ID.fetch_add(1, Ordering::SeqCst);
-    let mut lock = STARTUP_DATA_MAP.try_lock().unwrap();
-    lock.insert(startup_data_id, Arc::new(startup_data));
-    Ok(JsonOp::Sync(json!(ResourceIdResponse {
-        rid: startup_data_id,
-    })))
-}
-
 #[derive(Deserialize)]
 struct NewIsolateOptions {
     pub will_snapshot: bool,
-    pub startup_data_rid: Option<u32>,
+    pub snapshot_rid: Option<u32>,
     pub loader_rid: u32,
 }
 
 pub fn op_new_isolate(args: Value, _zero_copy: Option<PinnedBuf>) -> Result<JsonOp, ErrBox> {
     let args: NewIsolateOptions = serde_json::from_value(args)?;
 
-    let rid = match args.startup_data_rid {
-        Some(_rid) => {
-            // TODO(afinch7) make this work.
+    let rid = match args.snapshot_rid {
+        Some(rid) => {
+            let startup_data = crate::snapshots::snapshot_as_startup_data(rid);
             let isolate_rid =
-                op_new_isolate_inner(args.loader_rid, StartupData::None, args.will_snapshot);
+                op_new_isolate_inner(args.loader_rid, startup_data, args.will_snapshot);
             isolate_rid
         }
         None => {
@@ -161,7 +148,7 @@ pub fn op_isolate_execute(args: Value, _zero_copy: Option<PinnedBuf>) -> Result<
     drop(lock);
 
     let fut = async move {
-        let mut isolate_lock = isolate.lock().await;
+        let mut isolate_lock = isolate.try_lock().unwrap();
         isolate_lock.execute(&args.filename, &args.source)
     }
     .map_ok(|_| json!({}))
@@ -200,4 +187,25 @@ pub fn op_isolate_execute_module(
     let fut_handle = pool.spawn_with_handle(fut).unwrap();
 
     Ok(JsonOp::Async(fut_handle.boxed()))
+}
+
+#[derive(Deserialize)]
+struct IsolateSnapshotOptions {
+    pub rid: u32,
+}
+
+pub fn op_isolate_snapshot(args: Value, _zero_copy: Option<PinnedBuf>) -> Result<JsonOp, ErrBox> {
+    let args: IsolateSnapshotOptions = serde_json::from_value(args)?;
+
+    let lock = ISOLATE_MAP.read().unwrap();
+    let isolate = lock.get(&args.rid).unwrap().clone();
+    drop(lock);
+
+    let mut i = isolate.try_lock().unwrap();
+    let snapshot = i.snapshot()?;
+    let snapshot_buf: Buf = (**snapshot).into();
+
+    Ok(JsonOp::Sync(json!(ResourceIdResponse {
+        rid: crate::snapshots::new_snapshot(snapshot_buf.into()),
+    })))
 }

@@ -36,12 +36,12 @@ export const stdDispatcherWaitForDispatch = new DispatchJsonPluginOp(plugin.ops.
 export const stdDispatcherRespond = new DispatchJsonPluginOp(plugin.ops.stdDispatcherRespond);
 
 // Isolate ops
-export const newStartupData = new DispatchJsonPluginOp(plugin.ops.newStartupData);
 export const newIsolate = new DispatchJsonPluginOp(plugin.ops.newIsolate);
 export const isolateIsComplete = new DispatchJsonPluginOp(plugin.ops.isolateIsComplete);
 export const isolateRegisterOp = new DispatchJsonPluginOp(plugin.ops.isolateRegisterOp);
 export const isolateExecute = new DispatchJsonPluginOp(plugin.ops.isolateExecute);
 export const isolateExecuteModule = new DispatchJsonPluginOp(plugin.ops.isolateExecuteModule);
+export const isolateSnapshot = new DispatchJsonPluginOp(plugin.ops.isolateSnapshot);
 
 // Module ops
 export const newStdLoader = new DispatchJsonPluginOp(plugin.ops.newStdLoader);
@@ -49,3 +49,7 @@ export const stdLoaderAwaitResolve = new DispatchJsonPluginOp(plugin.ops.stdLoad
 export const stdLoaderRespondResolve = new DispatchJsonPluginOp(plugin.ops.stdLoaderRespondResolve);
 export const stdLoaderAwaitLoad = new DispatchJsonPluginOp(plugin.ops.stdLoaderAwaitLoad);
 export const stdLoaderRespondLoad = new DispatchJsonPluginOp(plugin.ops.stdLoaderRespondLoad);
+
+// Snapshot ops
+export const newSnapshot = new DispatchJsonPluginOp(plugin.ops.newSnapshot);
+export const snapshotRead = new DispatchJsonPluginOp(plugin.ops.snapshotRead);

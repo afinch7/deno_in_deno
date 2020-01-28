@@ -2,7 +2,6 @@ import {
   Isolate,
   StdDispatcher,
   StdLoader,
-  getDispatcherAccessors
 } from "./plugin/mod.ts";
 import { CustomDispatcher } from "./test_dispatcher/mod.ts";
 
@@ -11,25 +10,21 @@ const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 
 const source = `
-const data = new Uint8Array([116, 101, 115, 116]);
+function main() {
+  const data = new Uint8Array([116, 101, 115, 116]);
 
-Deno.core.print(\`Some test TEXT\n\`);
-
-async function callOp(opId) {
+  async function callOp(opId) {
     Deno.core.print(\`GUEST RUNTIME CALLING OP \${opId} \n\`);
     const response = Deno.core.dispatch(opId, data);
     Deno.core.print(\`GUEST RUNTIME RECIEVED RESPONSE \${response} \n\`);
-}
+  }
 
-function main() {
-    let ops = Deno.core.ops();
-    let testOpId = ops.testOp;
-    let testOpJsId = ops.testOpJs;
-    callOp(testOpId);
-    callOp(testOpJsId);
+  let ops = Deno.core.ops();
+  let testOpId = ops.testOp;
+  let testOpJsId = ops.testOpJs;
+  callOp(testOpId);
+  callOp(testOpJsId);
 }
-
-main();
 `;
 
 const loader = new StdLoader(
@@ -64,15 +59,23 @@ dispatcher.ondispatch = (
 
 const customDispatcher = new CustomDispatcher();
 
-isolate.registerOp("testOp", customDispatcher);
-isolate.registerOp("testOpJs", dispatcher);
-
 async function main() {
   console.log("PRE EXECUTE");
   await isolate.execute(source);
+  const snapshot = isolate.snapshot();
+  async function loadSnapshotAndExecute() {
+    const snapshotIsolate = new Isolate(loader, {
+      will_snapshot: false,
+      snapshot,
+    });
+    snapshotIsolate.registerOp("testOp", customDispatcher);
+    snapshotIsolate.registerOp("testOpJs", dispatcher);
+    await snapshotIsolate.execute("main()");
+  }
+  for (const x of Array(50).keys()) {
+    await loadSnapshotAndExecute();
+  }
   Deno.exit();
 }
 
 main();
-
-console.log(getDispatcherAccessors());

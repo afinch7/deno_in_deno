@@ -8,6 +8,7 @@ mod dispatch;
 mod isolate;
 mod modules;
 mod msg;
+mod snapshots;
 
 pub use dispatch::Dispatcher;
 pub use dispatch::GetDispatcherAccessor;
@@ -33,10 +34,6 @@ pub fn init(cx: &mut dyn PluginInitContext) {
     );
 
     // Isolate ops
-    cx.register_op(
-        "newStartupData",
-        json_op(Box::new(isolate::op_new_startup_data)),
-    );
     cx.register_op("newIsolate", json_op(Box::new(isolate::op_new_isolate)));
     cx.register_op(
         "isolateIsComplete",
@@ -53,6 +50,10 @@ pub fn init(cx: &mut dyn PluginInitContext) {
     cx.register_op(
         "isolateExecuteModule",
         json_op(Box::new(isolate::op_isolate_execute_module)),
+    );
+    cx.register_op(
+        "isolateSnapshot",
+        json_op(Box::new(isolate::op_isolate_snapshot)),
     );
 
     // Module ops
@@ -75,6 +76,13 @@ pub fn init(cx: &mut dyn PluginInitContext) {
     cx.register_op(
         "stdLoaderRespondLoad",
         json_op(Box::new(modules::op_std_loader_respond_load)),
+    );
+
+    // Snapshot ops
+    cx.register_op("newSnapshot", json_op(Box::new(snapshots::op_new_snapshot)));
+    cx.register_op(
+        "snapshotRead",
+        json_op(Box::new(snapshots::op_snapshot_read)),
     );
 }
 

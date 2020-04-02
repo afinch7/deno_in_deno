@@ -21,7 +21,7 @@ init_fn!(init);
 struct CustomDispatcher;
 
 impl Dispatcher for CustomDispatcher {
-    fn dispatch(&self, data: &[u8], _zero_copy: Option<PinnedBuf>) -> CoreOp {
+    fn dispatch(&self, data: &[u8], _zero_copy: Option<ZeroCopyBuf>) -> CoreOp {
         dbg!(data);
         let result = b"test1234";
         Op::Sync(result[..].into())
@@ -42,7 +42,7 @@ struct NewCustomDispatcherResponse {
 
 pub fn op_new_custom_dispatcher(
     args: Value,
-    _zero_copy: Option<PinnedBuf>,
+    _zero_copy: Option<ZeroCopyBuf>,
 ) -> Result<JsonOp, ErrBox> {
     let args: NewCustomDispatcherOptions = serde_json::from_value(args)?;
     let insert_dispatcher = unsafe { *(args.insert_dispatcher as *const InsertDispatcherAccessor) };

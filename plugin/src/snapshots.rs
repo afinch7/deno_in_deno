@@ -32,7 +32,7 @@ pub fn snapshot_as_startup_data(snapshot_rid: ResourceId) -> StartupData<'static
     owned_startup_data
 }
 
-pub fn op_new_snapshot(_args: Value, zero_copy: Option<PinnedBuf>) -> Result<JsonOp, ErrBox> {
+pub fn op_new_snapshot(_args: Value, zero_copy: Option<ZeroCopyBuf>) -> Result<JsonOp, ErrBox> {
     assert!(zero_copy.is_some());
     let startup_data = zero_copy.unwrap().to_vec();
     Ok(JsonOp::Sync(json!(ResourceIdResponse {
@@ -45,7 +45,7 @@ struct SnapshotReadArgs {
     pub rid: u32,
 }
 
-pub fn op_snapshot_read(args: Value, _zero_copy: Option<PinnedBuf>) -> Result<JsonOp, ErrBox> {
+pub fn op_snapshot_read(args: Value, _zero_copy: Option<ZeroCopyBuf>) -> Result<JsonOp, ErrBox> {
     let args: SnapshotReadArgs = serde_json::from_value(args)?;
 
     let lock = SNAPSHOT_MAP.try_lock().unwrap();

@@ -191,7 +191,7 @@ struct NewStdDispatcherResponse {
     pub loader_rid: u32,
 }
 
-pub fn op_new_std_loader(_args: Value, _zero_copy: Option<PinnedBuf>) -> Result<JsonOp, ErrBox> {
+pub fn op_new_std_loader(_args: Value, _zero_copy: Option<ZeroCopyBuf>) -> Result<JsonOp, ErrBox> {
     let std_rid = NEXT_STD_LOADER_ID.fetch_add(1, Ordering::SeqCst);
     let loader = Arc::new(StdLoader::new());
     let mut lock = STD_LOADER_MAP.write().unwrap();
@@ -246,7 +246,7 @@ impl Future for ResolveWorker {
 
 pub fn op_std_loader_await_resolve(
     args: Value,
-    _zero_copy: Option<PinnedBuf>,
+    _zero_copy: Option<ZeroCopyBuf>,
 ) -> Result<JsonOp, ErrBox> {
     let args: StdLoaderAwaitResolveOptions = serde_json::from_value(args)?;
 
@@ -264,7 +264,7 @@ struct StdLoaderRespondResolveOptions {
 
 pub fn op_std_loader_respond_resolve(
     args: Value,
-    _zero_copy: Option<PinnedBuf>,
+    _zero_copy: Option<ZeroCopyBuf>,
 ) -> Result<JsonOp, ErrBox> {
     let args: StdLoaderRespondResolveOptions = serde_json::from_value(args)?;
 
@@ -319,7 +319,7 @@ impl Future for LoadWorker {
 
 pub fn op_std_loader_await_load(
     args: Value,
-    _zero_copy: Option<PinnedBuf>,
+    _zero_copy: Option<ZeroCopyBuf>,
 ) -> Result<JsonOp, ErrBox> {
     let args: StdLoaderAwaitResolveOptions = serde_json::from_value(args)?;
 
@@ -338,7 +338,7 @@ struct StdLoaderRespondLoadOptions {
 
 pub fn op_std_loader_respond_load(
     args: Value,
-    _zero_copy: Option<PinnedBuf>,
+    _zero_copy: Option<ZeroCopyBuf>,
 ) -> Result<JsonOp, ErrBox> {
     let args: StdLoaderRespondLoadOptions = serde_json::from_value(args)?;
 

@@ -42,9 +42,9 @@ struct AsyncArgs {
 }
 
 pub fn json_op(
-    d: Box<dyn Fn(Value, Option<PinnedBuf>) -> Result<JsonOp, ErrBox> + Send + Sync + 'static>,
-) -> Box<dyn Fn(&[u8], Option<PinnedBuf>) -> CoreOp + Send + Sync + 'static> {
-    Box::new(move |control: &[u8], zero_copy: Option<PinnedBuf>| {
+    d: Box<dyn Fn(Value, Option<ZeroCopyBuf>) -> Result<JsonOp, ErrBox> + Send + Sync + 'static>,
+) -> Box<dyn Fn(&[u8], Option<ZeroCopyBuf>) -> CoreOp + Send + Sync + 'static> {
+    Box::new(move |control: &[u8], zero_copy: Option<ZeroCopyBuf>| {
         let async_args: AsyncArgs = match serde_json::from_slice(control) {
             Ok(args) => args,
             Err(e) => {

@@ -11,7 +11,7 @@ edition = "2018"
 path = "lib.rs"
 
 [dependencies]
-deno_core = "0.30.1"
+deno_core = "0.38.0"
 futures = { version = "0.3" }
 log = "0.4.8"
 serde = { version = "1.0.102", features = ["derive"] }

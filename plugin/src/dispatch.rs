@@ -31,7 +31,7 @@ lazy_static! {
 
 // TODO(afinch7) maybe move this to another package/crate
 pub trait Dispatcher: Send + Sync {
-    fn dispatch(&self, data: &[u8], zero_copy: Option<PinnedBuf>) -> CoreOp;
+    fn dispatch(&self, data: &[u8], zero_copy: Option<ZeroCopyBuf>) -> CoreOp;
 }
 
 pub fn insert_dispatcher(dispatcher: Arc<Box<dyn Dispatcher>>) -> ResourceId {
@@ -58,7 +58,7 @@ struct GetDispatcherAccessorPtrResponse {
 
 pub fn op_get_dispatcher_accessor_ptrs(
     _args: Value,
-    _zero_copy: Option<PinnedBuf>,
+    _zero_copy: Option<ZeroCopyBuf>,
 ) -> Result<JsonOp, ErrBox> {
     let get_dispatcher_ptr: usize =
         &(get_dispatcher as GetDispatcherAccessor) as *const GetDispatcherAccessor as usize;
@@ -92,7 +92,7 @@ impl StdDispatcher {
 }
 
 impl Dispatcher for StdDispatcher {
-    fn dispatch(&self, data: &[u8], zero_copy: Option<PinnedBuf>) -> CoreOp {
+    fn dispatch(&self, data: &[u8], zero_copy: Option<ZeroCopyBuf>) -> CoreOp {
         let cmd_id = self.next_cmd_id.fetch_add(1, Ordering::SeqCst);
         let (res_sender, mut res_reciever) = oneshot::channel::<CoreOp>();
         {
@@ -114,7 +114,7 @@ impl Dispatcher for StdDispatcher {
 }
 
 impl Dispatcher for Arc<StdDispatcher> {
-    fn dispatch(&self, data: &[u8], zero_copy: Option<PinnedBuf>) -> CoreOp {
+    fn dispatch(&self, data: &[u8], zero_copy: Option<ZeroCopyBuf>) -> CoreOp {
         self.as_ref().dispatch(data, zero_copy)
     }
 }
@@ -127,7 +127,7 @@ struct NewStdDispatcherResponse {
 
 pub fn op_new_std_dispatcher(
     _args: Value,
-    _zero_copy: Option<PinnedBuf>,
+    _zero_copy: Option<ZeroCopyBuf>,
 ) -> Result<JsonOp, ErrBox> {
     let std_rid = NEXT_STD_DISPATCHER_ID.fetch_add(1, Ordering::SeqCst);
     let dispatcher = Arc::new(StdDispatcher::new());
@@ -182,7 +182,7 @@ impl Future for RecvWorker {
 
 pub fn op_std_dispatcher_wait_for_dispatch(
     args: Value,
-    _zero_copy: Option<PinnedBuf>,
+    _zero_copy: Option<ZeroCopyBuf>,
 ) -> Result<JsonOp, ErrBox> {
     let args: StdDispatcherWaitForDispatchOptions = serde_json::from_value(args)?;
 
@@ -199,7 +199,7 @@ struct StdDispatcherRespondOptions {
 
 pub fn op_std_dispatcher_respond(
     args: Value,
-    zero_copy: Option<PinnedBuf>,
+    zero_copy: Option<ZeroCopyBuf>,
 ) -> Result<JsonOp, ErrBox> {
     let args: StdDispatcherRespondOptions = serde_json::from_value(args)?;
     let lock = STD_DISPATCHER_MAP.read().unwrap();

@@ -35,7 +35,7 @@ struct NewIsolateOptions {
     pub loader_rid: u32,
 }
 
-pub fn op_new_isolate(args: Value, _zero_copy: Option<PinnedBuf>) -> Result<JsonOp, ErrBox> {
+pub fn op_new_isolate(args: Value, _zero_copy: Option<ZeroCopyBuf>) -> Result<JsonOp, ErrBox> {
     let args: NewIsolateOptions = serde_json::from_value(args)?;
 
     let rid = match args.snapshot_rid {
@@ -96,7 +96,7 @@ impl Future for IsolateWorker {
 
 pub fn op_isolate_is_complete(
     args: Value,
-    _zero_copy: Option<PinnedBuf>,
+    _zero_copy: Option<ZeroCopyBuf>,
 ) -> Result<JsonOp, ErrBox> {
     let args: IsolateIsCompleteOptions = serde_json::from_value(args)?;
 
@@ -119,7 +119,7 @@ struct IsolateRegisterOpOptions {
 
 pub fn op_isolate_register_op(
     args: Value,
-    _zero_copy: Option<PinnedBuf>,
+    _zero_copy: Option<ZeroCopyBuf>,
 ) -> Result<JsonOp, ErrBox> {
     let args: IsolateRegisterOpOptions = serde_json::from_value(args)?;
 
@@ -140,7 +140,7 @@ struct IsolateExecuteOptions {
     pub source: String,
 }
 
-pub fn op_isolate_execute(args: Value, _zero_copy: Option<PinnedBuf>) -> Result<JsonOp, ErrBox> {
+pub fn op_isolate_execute(args: Value, _zero_copy: Option<ZeroCopyBuf>) -> Result<JsonOp, ErrBox> {
     let args: IsolateExecuteOptions = serde_json::from_value(args)?;
 
     let lock = ISOLATE_MAP.read().unwrap();
@@ -167,7 +167,7 @@ struct IsolateExecuteModuleOptions {
 
 pub fn op_isolate_execute_module(
     args: Value,
-    _zero_copy: Option<PinnedBuf>,
+    _zero_copy: Option<ZeroCopyBuf>,
 ) -> Result<JsonOp, ErrBox> {
     let args: IsolateExecuteModuleOptions = serde_json::from_value(args)?;
 
@@ -194,7 +194,7 @@ struct IsolateSnapshotOptions {
     pub rid: u32,
 }
 
-pub fn op_isolate_snapshot(args: Value, _zero_copy: Option<PinnedBuf>) -> Result<JsonOp, ErrBox> {
+pub fn op_isolate_snapshot(args: Value, _zero_copy: Option<ZeroCopyBuf>) -> Result<JsonOp, ErrBox> {
     let args: IsolateSnapshotOptions = serde_json::from_value(args)?;
 
     let lock = ISOLATE_MAP.read().unwrap();
